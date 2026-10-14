@@ -1,0 +1,6 @@
+/* Base rules for the self-hosted app and the GitHub Pages demo.
+   (The claude.ai demo host adds the same rules itself, so index.html does not link this file.) */
+:root { padding-top: env(safe-area-inset-top, 0px); }
+body { margin: 0; }
+[hidden] { display: none !important; }
+img { max-width: 100%; }

@@ -1,0 +1,8 @@
+data/
+.env
+.git/
+.github/
+**/__pycache__/
+**/.pytest_cache/
+server/tests/
+docs/

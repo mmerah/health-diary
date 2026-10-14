@@ -1,0 +1,31 @@
+<title>Health Diary</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Health Diary">
+<link rel="stylesheet" href="fonts.css">
+<link rel="stylesheet" href="styles.css">
+
+<header class="topbar">
+  <div class="topbar-in">
+    <span class="brand">Health Diary</span>
+    <span class="demo" id="demo-badge" hidden>Demo · sample data</span>
+    <span class="status" id="save-status" aria-live="polite"></span>
+  </div>
+</header>
+
+<main id="view" class="view"></main>
+
+<nav class="tabbar" aria-label="Screens">
+  <button data-tab="today"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="M8 14.5h4"/></svg><span>Today</span></button>
+  <button data-tab="body"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="M8 9.5a5.5 5.5 0 0 1 8 0"/><path d="M12 9.5l1.5-2"/></svg><span>Body</span></button>
+  <button data-tab="docs"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg><span>Documents</span></button>
+  <button data-tab="report"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2-5 3 10 2.5-7 1.5 2h5"/></svg><span>Report</span></button>
+  <button data-tab="profile"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span>Profile</span></button>
+</nav>
+
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script src="util.js"></script>
+<script src="api.js"></script>
+<script src="report.js"></script>
+<script src="app.js"></script>

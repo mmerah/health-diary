@@ -1,0 +1,22 @@
+services:
+  health-diary:
+    image: ghcr.io/mmerah/health-diary:latest
+    # To build from source instead, replace the line above with:  build: .
+    container_name: health-diary
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # The database (diary.db). Back up this folder.
+      - ./data:/data
+    # No ports: Docktail sends tailnet traffic straight to the container.
+    # Without Docktail, publish a port instead, for example:  ports: ["127.0.0.1:8000:8000"]
+    labels:
+      - docktail.service.enable=true
+      - docktail.service.name=health-diary
+      - docktail.service.port=8000
+      - docktail.service.service-port=443
+      # Optional, if Homepage reads Docker labels. Replace tailXXXX with your tailnet name.
+      # - homepage.group=Personal
+      # - homepage.name=Health Diary
+      # - homepage.icon=mdi-heart-pulse
+      # - homepage.href=https://health-diary.tailXXXX.ts.net

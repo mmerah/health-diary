@@ -58,30 +58,39 @@ English and French labels both work (Core / Principal, Deep / Profond, and so on
 
 "Group By Day" gives one total per day and removes double counts from the iPhone and the Watch.
 
-### 4. Resting heart rate and HRV
+### 4. Resting heart rate and HRV (yesterday and today)
 
-12. **Find Health Samples** → Type: **Resting Heart Rate**, Sort by **Start Date**,
-    **Latest First**, **Limit 1**. Then **Get Details of Health Sample** → **Value**.
-    **Set Variable** → `RestingHR`.
-13. **Find Health Samples** → Type: **Heart Rate Variability**, Filter: **Start Date is today**.
-    Then **Calculate Statistics** → **Average**. **Set Variable** → `HRV`.
+12. **Find Health Samples**
+    - Type: **Resting Heart Rate**
+    - Filter: **Start Date** is in the last **2 days**
+    - Group By: **Day**
+13. **Repeat with Each**, then a **Text** with the same pattern as in step 10:
+    `[Value]|[Start Date]|[End Date]`
+14. **Combine Text** with **New Lines** → **Set Variable** → name: `RestingHR`.
+15. Do steps 12 to 14 again with Type: **Heart Rate Variability**. Name the variable `HRV`.
+
+The server puts each value on the day of its start date. When there are several HRV values
+for one day, it uses their average.
 
 ### 5. Weight (optional, if a scale writes to Apple Health)
 
-14. **Find Health Samples** → Type: **Weight**, Filter: **Start Date** is in the last **1 days**,
+16. **Find Health Samples** → Type: **Weight**, Filter: **Start Date** is in the last **1 days**,
     Sort by **Start Date**, **Latest First**, **Limit 1**.
-15. **Get Details of Health Sample** → **Value** → **Set Variable** `Weight`.
-16. Again on the same sample: **Get Details** → **Start Date** (ISO 8601, with time)
+17. **Get Details of Health Sample** → **Value** → **Set Variable** `Weight`.
+18. Again on the same sample: **Get Details** → **Start Date** (ISO 8601, with time)
     → **Set Variable** `WeightDate`.
 
 If no weight was recorded, these variables stay empty and the server ignores them.
+Pounds and stones also work: the server reads `170 lb`, `170 lbs` and `12 st`. If the value has
+no unit, add the field `weight_unit` (`kg`, `lb` or `st`) in step 19.
 
 ### 6. Send to the NAS
 
-17. **Get Contents of URL**
+19. **Get Contents of URL**
     - URL: `https://health-diary.tailXXXX.ts.net/api/ingest/health`
     - Method: **POST**
-    - Headers: `Authorization` = `Bearer ` followed by your key (one space after *Bearer*)
+    - Headers: add one header. Key: `Authorization`. Value: the word `Bearer`, one space, then your key.
+      Example: `Bearer 3vQ…`. Do not add quotes.
     - Request Body: **JSON**, with these fields:
 
     | Key | Type | Value |
@@ -96,7 +105,7 @@ If no weight was recorded, these variables stay empty and the server ignores the
 
 ### 7. Open the diary
 
-18. **Open URLs** → `https://health-diary.tailXXXX.ts.net/`
+20. **Open URLs** → `https://health-diary.tailXXXX.ts.net/`
 
 ## Finish
 
@@ -136,8 +145,15 @@ All fields are optional.
 | `sleep` | Lines `value\|start\|end\|source`. Dates in ISO 8601. |
 | `steps_days` | Lines `value\|start\|end` (one per day). Updates up to 7 days back. |
 | `steps` | Number. Today's steps. |
-| `resting_hr`, `hrv` | Numbers. `46,7` and `2 140` also work. |
-| `weight`, `weight_date` | kg, and ISO 8601 date-time. The same weight is stored once. |
+| `steps_yesterday` | Number. Yesterday's final steps. |
+| `resting_hr_days`, `hrv_days` | Lines `value\|start\|end`. Each value goes to the day of its start date. HRV values of one day are averaged. Updates up to 7 days back. |
+| `resting_hr`, `hrv` | Numbers, for `date`. Older shortcuts send these. |
+| `weight` | A number in kg, or with a unit: `170 lb`, `170 lbs`, `12 st`. |
+| `weight_unit` | `kg`, `lb` or `st`, for a weight without a unit. Default: `kg`. |
+| `weight_date` | ISO 8601 date-time of the weight. The same weight is stored once. Without it, the server keeps one weight per day. |
 | `workouts` | Lines `type\|start\|end`. |
+
+Numbers can use a decimal comma (`46,7`) and thousands separators (`2 140`, `12,345`).
+Values that cannot be true (for example 500 000 steps) are ignored. Other fields are refused.
 
 Values you corrected by hand in the app are never overwritten by a sync.

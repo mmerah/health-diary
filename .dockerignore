@@ -4,5 +4,10 @@ data/
 .github/
 **/__pycache__/
 **/.pytest_cache/
+**/.ruff_cache/
 server/tests/
+web/tests/
+web/node_modules/
+scripts/
+_site/
 docs/

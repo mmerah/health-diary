@@ -1,135 +1,217 @@
-import io
-import os
+import json
 import sqlite3
-import sys
-import tempfile
-import zipfile
-from pathlib import Path
 
-os.environ["DATA_DIR"] = tempfile.mkdtemp()
-os.environ["TZ"] = "Europe/Paris"
-os.environ["WEB_DIR"] = str(Path(__file__).resolve().parents[2] / "web")
-os.environ["COOKIE_SECURE"] = "false"
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from conftest import PW, login, new_client
 
-import pytest  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-
-from app import auth, db  # noqa: E402
-from app import main  # noqa: E402
-
-app = main.app
-PW = "correct horse battery"
+from app import auth, db, main
 
 
-def new_client():
-    return TestClient(app)
-
-
-# The admin, created through the first-setup screen. Most tests use this client.
-c = new_client()
-
-
-def setup_module():
-    assert c.get("/api/auth/status").json() == {"setupNeeded": True, "user": None}
-    assert c.post("/api/auth/setup", json={"code": "WRONG", "username": "anna", "password": PW}).status_code == 403
-    r = c.post("/api/auth/setup", json={"code": main.SETUP_CODE.lower(), "username": "anna", "password": PW})
+def test_setup_needs_the_code(server):
+    assert server.get("/api/auth/status").json() == {"setupNeeded": True, "user": None}
+    assert server.post("/api/auth/setup", json={"code": "WRONG", "username": "anna", "password": PW}).status_code == 403
+    # 7 groups of 4 from a 31-symbol alphabet: more than 128 bits.
+    groups = main.SETUP_CODE.split("-")
+    assert len(groups) == 7 and all(len(g) == 4 and set(g) <= set(auth.SETUP_ALPHABET) for g in groups)
+    # Case, spaces and dashes do not matter.
+    code = main.SETUP_CODE.replace("-", " ").lower()
+    r = server.post("/api/auth/setup", json={"code": code, "username": "anna", "password": PW})
     assert r.status_code == 200 and r.json()["isAdmin"] is True
-    # A second setup is refused.
-    assert new_client().post("/api/auth/setup", json={"code": main.SETUP_CODE, "username": "eve", "password": PW}).status_code == 409
+    assert set(r.json()) == {"id", "username", "isAdmin", "hasIngestToken", "ingestLastUsed", "createdAt", "notice"}
+    # A second setup is refused, even with the right code.
+    r = new_client().post("/api/auth/setup", json={"code": main.SETUP_CODE, "username": "eve", "password": PW})
+    assert r.status_code == 409
 
 
-def test_index_switches_to_server_and_sends_security_headers():
+def test_second_account_is_never_made_by_setup(server):
+    assert db.create_user("zed", auth.hash_password(PW), True, only_if_empty=True) is None
+
+
+def test_index_and_config(server):
     r = new_client().get("/")
-    assert r.status_code == 200 and r.text.startswith("<!doctype html>")
-    assert '<script src="config.js">' in r.text
+    assert r.status_code == 200
+    assert r.text == (main.WEB_DIR / "index.html").read_text(encoding="utf-8")
     assert "script-src 'self'" in r.headers["content-security-policy"]
+    assert "worker-src 'self'" in r.headers["content-security-policy"]
     assert r.headers["x-frame-options"] == "DENY"
-    assert "'/api'" in new_client().get("/config.js").text
-    assert new_client().get("/app.js").status_code == 200
+    # The route wins over a static web/config.js (the demo settings).
+    r = new_client().get("/config.js")
+    assert "'/api'" in r.text and r.headers["content-type"].startswith("text/javascript")
 
 
-def test_everything_needs_login():
+def test_everything_needs_login(c):
     anon = new_client()
     for path in ["/api/profile", "/api/settings", "/api/days", "/api/days/2026-10-01", "/api/measurements",
-                 "/api/documents", "/api/users", "/api/me/paperless"]:
+                 "/api/documents", "/api/users", "/api/me/paperless", "/api/me/export"]:
         assert anon.get(path).status_code == 401, path
     assert anon.put("/api/profile", json={}).status_code == 401
     assert anon.post("/api/ingest/health", json={}).status_code == 401
-    assert anon.get("/api/health").status_code == 200
+    assert anon.get("/api/health").json()["ok"] is True
 
 
-def test_cross_site_requests_are_refused():
-    r = c.put("/api/profile", json={"name": "x"}, headers={"Sec-Fetch-Site": "cross-site"})
-    assert r.status_code == 403
-
-
-def test_profile_and_settings():
+def test_profile(c):
     assert c.get("/api/profile").json() == {}
-    c.put("/api/profile", json={"name": "Test", "heightCm": 180})
-    assert c.get("/api/profile").json()["heightCm"] == 180
+    meds = [{"id": "m1", "name": "Ibuprofen", "dose": "200 mg", "since": "2026-01-02", "until": "", "asNeeded": True}]
+    assert c.put("/api/profile", json={"name": "Test", "heightCm": 180, "medications": meds, "v": 2}).status_code == 204
+    p = c.get("/api/profile").json()
+    assert p == {"name": "Test", "heightCm": 180, "medications": meds, "v": 2}
+    for bad in ({"heightCm": 20}, {"dob": "2026-02-31"}, {"sex": "x"}, {"name": "x" * 201}, {"unknown": 1},
+                {"medications": [{"name": "x", "since": "yesterday"}]}, {"medications": [{}] * 51}):
+        r = c.put("/api/profile", json=bad)
+        assert r.status_code == 400, bad
+        assert "Traceback" not in r.text
+
+
+def test_old_profile_is_returned_as_is(c):
+    uid = c.get("/api/auth/status").json()["user"]["id"]
+    db.set_kv(uid, "profile", {"medications": "Aspirin\nVitamin D"})
+    assert c.get("/api/profile").json() == {"medications": "Aspirin\nVitamin D"}
+
+
+def test_settings(c):
     c.put("/api/settings", json={"redactWords": ["Clinic"]})
+    c.put("/api/settings", json={"excludedDocs": [3], "lastSync": "2000-01-01T00:00"})
     s = c.get("/api/settings").json()
-    assert s["redactWords"] == ["Clinic"] and s["excludedDocs"] == []
+    assert s == {"lastSync": None, "redactWords": ["Clinic"], "excludedDocs": [3]}
+    assert c.put("/api/settings", json={"redactWords": ["x"] * 301}).status_code == 400
+    assert c.put("/api/settings", json={"theme": "dark"}).status_code == 400
 
 
-def test_days():
-    log = {"meals": {"breakfast": {"time": "07:30", "text": "Eggs"}}, "symptoms": []}
-    assert c.put("/api/days/2026-10-01/log", json=log).status_code == 204
-    assert c.get("/api/days/2026-10-01").json()["log"]["meals"]["breakfast"]["text"] == "Eggs"
+LOG = {
+    "v": 2,
+    "meals": {"breakfast": {"time": "07:30", "text": "Eggs"}, "lunch": {"time": "", "text": ""}},
+    "snacks": [{"time": "16:00", "text": "Apple"}],
+    "drinks": {"water": 6, "coffee": 2, "alcohol": None},
+    "meds": {"taken": {"m1": {"done": True, "time": "08:00"}}, "extra": [{"name": "Paracetamol", "time": "14:00"}]},
+    "activities": "Walk",
+    "symptoms": [{"name": "Headache", "severity": 2, "when": "periods", "periods": ["morning"], "from": "", "to": ""},
+                 {"name": "Nausea", "severity": None, "when": "time", "periods": [], "from": "13:00", "to": "14:30"}],
+    "notes": "ok",
+}
+
+
+def test_days(c):
+    assert c.put("/api/days/2026-10-01/log", json=LOG).status_code == 204
+    assert c.get("/api/days/2026-10-01").json()["log"] == LOG
     assert [d["date"] for d in c.get("/api/days?from=2026-09-30&to=2026-10-02").json()] == ["2026-10-01"]
     assert c.get("/api/days/2026-13-1").status_code == 400
+    assert c.get("/api/days/2026-02-30").status_code == 400
 
 
-def test_measurements():
+def test_day_log_validation(c):
+    bad = [
+        {"v": 1},
+        {"meals": {"breakfast": {"time": "7:30", "text": "x"}}},
+        {"meals": {"lunch": {"time": "24:00", "text": "x"}}},
+        {"snacks": [{"time": "", "text": "x"}] * 21},
+        {"drinks": {"water": 51}},
+        {"drinks": {"coffee": -1}},
+        {"symptoms": [{"name": "x", "severity": 4}]},
+        {"symptoms": [{"name": "x", "periods": ["noon"]}]},
+        {"notes": "x" * 10001},
+        {"mood": "great"},
+    ]
+    for body in bad:
+        assert c.put("/api/days/2026-10-01/log", json=body).status_code == 400, body
+
+
+def test_day_health_validation(c):
+    good = {"sleep": {"total": 400, "deep": 60, "rem": 80, "core": 260, "awake": 5, "bed": "23:00", "wake": "06:45",
+                      "naps": [{"start": "14:00", "end": "14:30", "minutes": 30}], "inBedOnly": False},
+            "steps": 8000, "restingHr": 60, "hrv": 40, "workouts": [{"type": "Walk", "minutes": 30, "start": None}],
+            "source": "manual", "syncedAt": None, "edited": ["steps"]}
+    assert c.put("/api/days/2026-10-05/health", json=good).status_code == 204
+    assert c.get("/api/days/2026-10-05").json()["health"] == good
+    for bad in ({"steps": -1}, {"restingHr": 400}, {"sleep": {"total": 2000}}, {"source": "fitbit"},
+                {"sleep": {"bed": "25:00"}}, {"extra": True}):
+        assert c.put("/api/days/2026-10-05/health", json=bad).status_code == 400, bad
+
+
+def test_measurements(c):
     m = c.post("/api/measurements", json={"type": "temp", "date": "2026-10-02", "time": "21:00", "value": 38.2}).json()
     assert m["value"] == 38.2 and m["source"] == "manual"
     assert any(x["id"] == m["id"] for x in c.get("/api/measurements?type=temp").json())
-    assert c.post("/api/measurements", json={"type": "height", "date": "2026-10-02", "value": 1}).status_code == 400
+    bp = c.post("/api/measurements", json={"type": "bp", "date": "2026-10-03", "time": "",
+                                           "value": {"sys": 120, "dia": 80, "pulse": None}}).json()
+    assert bp["value"] == {"sys": 120, "dia": 80, "pulse": None} and bp["time"] is None
+    # A client cannot claim the value came from Apple Health.
+    w = c.post("/api/measurements", json={"type": "weight", "date": "2026-10-04", "time": "07:00", "value": 70.5,
+                                          "source": "apple"}).json()
+    assert w["source"] == "manual"
+    # Date filter
+    assert [x["date"] for x in c.get("/api/measurements?from=2026-10-03&to=2026-10-03").json()] == ["2026-10-03"]
+    for bad in ({"type": "height", "date": "2026-10-02", "value": 1},
+                {"type": "weight", "date": "2026-10-02", "value": 3000},
+                {"type": "weight", "date": "2026-02-30", "value": 70},
+                {"type": "temp", "date": "2026-10-02", "value": 50},
+                {"type": "bp", "date": "2026-10-02", "value": {"sys": 300, "dia": 80}},
+                {"type": "weight", "date": "2026-10-02", "time": "7h", "value": 70}):
+        assert c.post("/api/measurements", json=bad).status_code == 400, bad
     assert c.delete(f"/api/measurements/{m['id']}").status_code == 204
     assert c.delete(f"/api/measurements/{m['id']}").status_code == 404
 
 
-def test_documents_without_paperless():
+def test_validation_errors_are_plain(c):
+    r = c.post("/api/measurements", json={"type": "weight", "date": "2026-10-02", "value": "<script>"})
+    assert r.status_code == 400
+    assert "<script>" not in r.text and r.json()["detail"].startswith("Some values are not valid")
+
+
+def test_documents_without_paperless(c):
     assert c.get("/api/documents").json() == []
     assert c.get("/api/me/paperless").json()["available"] is False
 
 
-def test_users_are_isolated_and_managed_by_admin():
-    # Admin adds Ben. Ben logs in on his own device.
+def test_users_are_isolated_and_managed_by_admin(c):
     assert c.post("/api/users", json={"username": "ben", "password": "short"}).status_code == 400
     ben_id = c.post("/api/users", json={"username": "ben", "password": PW}).json()["id"]
     assert c.post("/api/users", json={"username": "BEN", "password": PW}).status_code == 409
-    ben = new_client()
-    assert ben.post("/api/auth/login", json={"username": "ben", "password": PW}).status_code == 200
+    ben = login("ben")
 
-    # Ben sees none of Anna's data, and Anna none of Ben's.
     assert ben.get("/api/days").json() == []
     assert ben.get("/api/profile").json() == {}
     m = ben.post("/api/measurements", json={"type": "weight", "date": "2026-10-03", "value": 70}).json()
     assert all(x["id"] != m["id"] for x in c.get("/api/measurements").json())
-    assert c.delete(f"/api/measurements/{m['id']}").status_code == 404  # cannot delete another user's row
+    assert c.delete(f"/api/measurements/{m['id']}").status_code == 404
 
-    # Ben is not an administrator.
     assert ben.get("/api/users").status_code == 403
     assert ben.post("/api/users", json={"username": "x", "password": PW}).status_code == 403
+    assert ben.put(f"/api/users/{ben_id}/admin", json={"isAdmin": True}).status_code == 403
 
-    # A new password from the admin logs Ben out.
+    # A new password from the admin logs Ben out, and Ben sees a notice at the next login.
     assert c.put(f"/api/users/{ben_id}/password", json={"password": "another good one"}).status_code == 204
     assert ben.get("/api/profile").status_code == 401
+    ben = login("ben", "another good one")
+    notice = ben.get("/api/auth/status").json()["user"]["notice"]
+    assert "reset your password" in notice and "anna" in notice
+    assert ben.post("/api/me/notice/dismiss").status_code == 204
+    assert ben.get("/api/auth/status").json()["user"]["notice"] is None
 
-    # Deleting Ben deletes his data too.
-    assert c.delete(f"/api/users/{c.get('/api/auth/status').json()['user']['id']}").status_code == 400
+    me = c.get("/api/auth/status").json()["user"]["id"]
+    assert c.delete(f"/api/users/{me}").status_code == 400
     assert c.delete(f"/api/users/{ben_id}").status_code == 204
+    assert c.delete(f"/api/users/{ben_id}").status_code == 404
     with db.connect() as con:
         assert con.execute("SELECT COUNT(*) FROM measurements WHERE user_id = ?", (ben_id,)).fetchone()[0] == 0
 
 
-def test_change_password_logs_out_other_devices():
+def test_last_admin_is_protected(c):
+    me = c.get("/api/auth/status").json()["user"]["id"]
+    assert c.put(f"/api/users/{me}/admin", json={"isAdmin": False}).status_code == 409
+    dan = c.post("/api/users", json={"username": "dan", "password": PW}).json()
+    assert c.put(f"/api/users/{dan['id']}/admin", json={"isAdmin": True}).json()["isAdmin"] is True
+    # Now there are two: anna may step down, and dan may not.
+    assert c.put(f"/api/users/{me}/admin", json={"isAdmin": False}).json()["isAdmin"] is False
+    d = login("dan")
+    assert d.put(f"/api/users/{dan['id']}/admin", json={"isAdmin": False}).status_code == 409
+    assert d.request("DELETE", "/api/me", json={"password": PW}).status_code == 409
+    assert d.put(f"/api/users/{me}/admin", json={"isAdmin": True}).status_code == 200
+    assert d.put(f"/api/users/{me}/admin", json={"isAdmin": "yes please"}).status_code == 400
+    assert c.delete(f"/api/users/{dan['id']}").status_code == 204
+
+
+def test_change_password_logs_out_other_devices(c):
     c.post("/api/users", json={"username": "cleo", "password": PW})
-    phone, laptop = new_client(), new_client()
-    for x in (phone, laptop):
-        assert x.post("/api/auth/login", json={"username": "cleo", "password": PW}).status_code == 200
+    phone, laptop = login("cleo"), login("cleo")
     assert phone.put("/api/me/password", json={"current": "wrong", "new": "a new password"}).status_code == 400
     assert phone.put("/api/me/password", json={"current": PW, "new": "a new password"}).status_code == 204
     assert phone.get("/api/profile").status_code == 200
@@ -138,129 +220,92 @@ def test_change_password_logs_out_other_devices():
     assert phone.get("/api/profile").status_code == 401
 
 
-def test_password_guessing_is_blocked():
-    auth._failures.clear()
-    x = new_client()
-    for _ in range(auth.MAX_FAILURES):
-        assert x.post("/api/auth/login", json={"username": "dora", "password": "nope"}).status_code == 401
-    r = x.post("/api/auth/login", json={"username": "dora", "password": "nope"})
-    assert r.status_code == 429 and "Retry-After" in r.headers
-    auth._failures.clear()
+def test_export_and_delete_my_account(c):
+    c.post("/api/users", json={"username": "erin", "password": PW})
+    e = login("erin")
+    e.put("/api/profile", json={"name": "Erin"})
+    e.put("/api/days/2026-10-01/log", json={"notes": "mine"})
+    e.post("/api/measurements", json={"type": "weight", "date": "2026-10-01", "value": 60})
+    e.put("/api/me/paperless", json={"token": "erin-secret-token", "tag": "health"})
+    e.post("/api/me/ingest-token")
+
+    r = e.get("/api/me/export")
+    assert r.status_code == 200
+    assert r.headers["content-disposition"].startswith('attachment; filename="health-diary-erin-')
+    data = r.json()
+    assert data["version"] == 1 and data["user"]["username"] == "erin"
+    assert data["profile"] == {"name": "Erin"} and data["days"][0]["log"] == {"notes": "mine"}
+    assert data["measurements"][0]["value"] == 60 and data["paperless"] == {"tag": "health"}
+    assert set(data["settings"]) == {"lastSync", "redactWords", "excludedDocs"}
+    assert "erin-secret-token" not in r.text and "hash" not in r.text
+
+    uid = data_uid = e.get("/api/auth/status").json()["user"]["id"]
+    assert e.request("DELETE", "/api/me", json={"password": "wrong"}).status_code == 400
+    assert e.request("DELETE", "/api/me", json={}).status_code == 400
+    r = e.request("DELETE", "/api/me", json={"password": PW})
+    assert r.status_code == 204
+    assert e.get("/api/profile").status_code == 401
+    assert db.get_user(uid) is None
+    with db.connect() as con:
+        for t in ("days", "measurements", "kv", "sessions"):
+            assert con.execute(f"SELECT COUNT(*) FROM {t} WHERE user_id = ?", (data_uid,)).fetchone()[0] == 0
+    # The WAL file was emptied, so the deleted rows are not left in it.
+    wal = db.DB_PATH.with_name("diary.db-wal")
+    assert not wal.exists() or wal.stat().st_size == 0
 
 
-def test_passwords_are_hashed():
+def test_sole_user_may_delete_their_account(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "diary.db")
+    monkeypatch.setattr(db, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(db, "TMP_DIR", tmp_path / "tmp")
+    db.init()
+    uid = db.create_user("solo", auth.hash_password(PW), True)["id"]
+    assert db.delete_user(uid, allow_sole_user=True) is True
+    assert db.count_users() == 0
+
+
+def test_passwords_are_hashed(c):
     with db.connect() as con:
         stored = con.execute("SELECT password_hash FROM users WHERE username = 'anna'").fetchone()[0]
     assert stored.startswith("scrypt$") and PW not in stored
     assert auth.verify_password(PW, stored) and not auth.verify_password(PW + "x", stored)
+    assert auth.authenticate("anna", PW)["username"] == "anna"
+    assert auth.authenticate("anna", "nope") is None and auth.authenticate("nobody", PW) is None
 
 
-def ingest(json, token):
-    return c.post("/api/ingest/health", json=json, headers={"Authorization": f"Bearer {token}"})
+def test_migrations_set_the_version(c):
+    with db.connect() as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 3
+        assert con.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert con.execute("PRAGMA secure_delete").fetchone()[0] == 1
 
 
-@pytest.fixture(scope="module")
-def key():
-    return c.post("/api/me/ingest-token").json()["token"]
+def test_expired_sessions_are_purged(c):
+    uid = c.get("/api/auth/status").json()["user"]["id"]
+    db.create_session("old", uid, "2000-01-01 00:00:00")
+    with db.connect() as con:
+        con.execute("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ('old2', ?, '2000-01-01 00:00:00')", (uid,))
+    assert db.purge_sessions() >= 1
+    with db.connect() as con:
+        assert con.execute("SELECT COUNT(*) FROM sessions WHERE expires_at < datetime('now')").fetchone()[0] == 0
 
 
-def test_shortcut_key(key):
-    assert c.get("/api/auth/status").json()["user"]["hasIngestToken"] is True
-    assert ingest({}, "wrong-key").status_code == 401
-    assert c.post("/api/ingest/health", json={}, headers={"X-Diary-Token": key}).status_code == 200
-
-
-SLEEP = "\n".join([
-    # Watch, with stages
-    "In Bed|2026-10-13T23:20:00+02:00|2026-10-14T06:40:00+02:00|Watch",
-    "Core|2026-10-13T23:30:00+02:00|2026-10-14T01:00:00+02:00|Watch",
-    "Deep|2026-10-14T01:00:00+02:00|2026-10-14T02:00:00+02:00|Watch",
-    "Awake|2026-10-14T02:00:00+02:00|2026-10-14T02:10:00+02:00|Watch",
-    "REM|2026-10-14T02:10:00+02:00|2026-10-14T03:40:00+02:00|Watch",
-    "Core|2026-10-14T03:40:00+02:00|2026-10-14T06:30:00+02:00|Watch",
-    # iPhone, no stages: must be ignored
-    "Asleep|2026-10-13T23:00:00+02:00|2026-10-14T07:00:00+02:00|iPhone",
-    # The night before: outside the window
-    "Core|2026-10-12T23:00:00+02:00|2026-10-13T06:00:00+02:00|Watch",
-])
-
-
-def test_shortcut_ingest_keeps_hand_corrections(key):
-    p = {"date": "2026-10-14", "sleep": SLEEP, "steps": "2 140", "steps_yesterday": 9832, "resting_hr": 57.6,
-         "hrv": "46,7", "weight": 76.9, "weight_date": "2026-10-14T07:31:00+02:00",
-         "workouts": "Walking|2026-10-14T12:10:00+02:00|2026-10-14T12:34:00+02:00"}
-    h = ingest(p, key).json()["health"]
-    assert h["sleep"] == {"total": 410, "deep": 60, "rem": 90, "core": 260, "awake": 10, "bed": "23:30", "wake": "06:30"}
-    assert h["steps"] == 2140 and h["restingHr"] == 58 and h["hrv"] == 47
-    assert h["workouts"] == [{"type": "Walking", "minutes": 24, "start": "12:10"}]
-    assert c.get("/api/days/2026-10-13").json()["health"]["steps"] == 9832
-    assert c.get("/api/settings").json()["lastSync"]
-
-    # Correct the steps by hand, then sync again: the correction stays.
-    c.put("/api/days/2026-10-14/health", json={**h, "steps": 5000, "edited": ["steps"]})
-    h2 = ingest({**p, "steps": 3000}, key).json()["health"]
-    assert h2["steps"] == 5000
-    # The same weight twice is stored once.
-    assert len([m for m in c.get("/api/measurements?type=weight").json() if m["date"] == "2026-10-14"]) == 1
-
-
-EXPORT = """<?xml version="1.0" encoding="UTF-8"?>
-<HealthData locale="fr_FR">
- <Record type="HKQuantityTypeIdentifierStepCount" sourceName="iPhone" unit="count" startDate="2025-03-02 10:00:00 +0100" endDate="2025-03-02 10:10:00 +0100" value="4000"/>
- <Record type="HKQuantityTypeIdentifierStepCount" sourceName="iPhone" unit="count" startDate="2025-03-02 15:00:00 +0100" endDate="2025-03-02 15:10:00 +0100" value="1000"/>
- <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Watch" unit="count" startDate="2025-03-02 10:00:00 +0100" endDate="2025-03-02 10:10:00 +0100" value="4200"/>
- <Record type="HKQuantityTypeIdentifierRestingHeartRate" sourceName="Watch" unit="count/min" startDate="2025-03-02 08:00:00 +0100" endDate="2025-03-02 20:00:00 +0100" value="61"/>
- <Record type="HKQuantityTypeIdentifierBodyMass" sourceName="Scale" unit="lb" startDate="2025-03-02 07:00:00 +0100" endDate="2025-03-02 07:00:00 +0100" value="170"/>
- <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Watch" startDate="2025-03-01 23:00:00 +0100" endDate="2025-03-02 03:00:00 +0100" value="HKCategoryValueSleepAnalysisAsleepCore"/>
- <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Watch" startDate="2025-03-02 03:00:00 +0100" endDate="2025-03-02 04:00:00 +0100" value="HKCategoryValueSleepAnalysisAsleepDeep"/>
- <Correlation type="HKCorrelationTypeIdentifierBloodPressure" startDate="2025-03-02 19:00:00 +0100" endDate="2025-03-02 19:00:00 +0100">
-  <Record type="HKQuantityTypeIdentifierBloodPressureSystolic" sourceName="Cuff" unit="mmHg" startDate="2025-03-02 19:00:00 +0100" endDate="2025-03-02 19:00:00 +0100" value="128"/>
-  <Record type="HKQuantityTypeIdentifierBloodPressureDiastolic" sourceName="Cuff" unit="mmHg" startDate="2025-03-02 19:00:00 +0100" endDate="2025-03-02 19:00:00 +0100" value="82"/>
- </Correlation>
- <Workout workoutActivityType="HKWorkoutActivityTypeTraditionalStrengthTraining" duration="45" durationUnit="min" startDate="2025-03-02 18:00:00 +0100" endDate="2025-03-02 18:45:00 +0100">
-  <WorkoutStatistics type="HKQuantityTypeIdentifierActiveEnergyBurned" sum="200" unit="kcal"/>
- </Workout>
-</HealthData>"""
-
-
-def _zip():
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as z:
-        z.writestr("apple_health_export/exportation.xml", EXPORT)
-        z.writestr("apple_health_export/export_cda.xml", "<x/>" * 5000)
-    return buf.getvalue()
-
-
-def test_import_export_zip():
-    r = c.post("/api/import/apple-health", files={"file": ("export.zip", _zip(), "application/zip")}).json()
-    assert r["days"] == 1 and r["first"] == "2025-03-02"
-    assert r["measurements"] == {"weight": 1, "bp": 1}
-    h = c.get("/api/days/2025-03-02").json()["health"]
-    assert h["steps"] == 5000  # iPhone 5000 beats Watch 4200; they are not added together
-    assert h["restingHr"] == 61
-    assert h["sleep"]["total"] == 300 and h["sleep"]["deep"] == 60
-    assert h["workouts"][0] == {"type": "Traditional Strength Training", "minutes": 45, "start": "18:00"}
-    w = [m for m in c.get("/api/measurements?type=weight").json() if m["date"] == "2025-03-02"][0]
-    assert w["value"] == 77.1
-    # A second import adds nothing.
-    assert c.post("/api/import/apple-health", files={"file": ("export.zip", _zip(), "application/zip")}).json()["measurements"] == {}
-
-
-def test_import_rejects_garbage():
-    assert c.post("/api/import/apple-health", files={"file": ("x.zip", b"not a zip", "application/zip")}).status_code == 400
-
-
-def test_steps_by_day(key):
-    lines = "8 412|2026-10-19T00:00:00+02:00|2026-10-20T00:00:00+02:00\n1520|2026-10-20T00:00:00+02:00|2026-10-21T00:00:00+02:00"
-    h = ingest({"date": "2026-10-20", "steps_days": lines}, key).json()["health"]
-    assert h["steps"] == 1520
-    assert c.get("/api/days/2026-10-19").json()["health"]["steps"] == 8412
+def test_transaction_rolls_back(c):
+    uid = c.get("/api/auth/status").json()["user"]["id"]
+    try:
+        with db.transaction():
+            db.save_day_part(uid, "2030-01-01", "log", {"notes": "x"})
+            raise RuntimeError
+    except RuntimeError:
+        pass
+    assert db.get_day(uid, "2030-01-01")["log"] is None
 
 
 def test_version_1_database_moves_to_the_first_account(tmp_path, monkeypatch):
     """A database from before accounts existed: the first account gets its data."""
     monkeypatch.setattr(db, "DATA_DIR", tmp_path)
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "diary.db")
+    monkeypatch.setattr(db, "TMP_DIR", tmp_path / "tmp")
     old = sqlite3.connect(tmp_path / "diary.db")
     old.executescript("""
       CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -275,9 +320,10 @@ def test_version_1_database_moves_to_the_first_account(tmp_path, monkeypatch):
     old.commit()
     old.close()
     db.init()
-    uid = db.create_user("first", auth.hash_password(PW), is_admin=True)["id"]
+    uid = db.create_user("first", auth.hash_password(PW), is_admin=True, only_if_empty=True)["id"]
     assert db.get_kv(uid, "profile", {}) == {"name": "Old"}
     assert db.get_day(uid, "2025-01-01")["log"] == {"notes": "old entry"}
     assert db.list_measurements(uid)[0]["value"] == 80
     second = db.create_user("second", auth.hash_password(PW))["id"]
     assert db.list_days(second) == []
+    assert json.loads(json.dumps(db.get_user(uid)))["ingestLastUsed"] is None

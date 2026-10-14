@@ -2,15 +2,19 @@
 
 The Paperless address is set for the whole install ($PAPERLESS_URL). Each user saves their
 own Paperless API token and tag in Profile, so users only see their own documents.
-$PAPERLESS_TOKEN is a fallback for the first account only.
+Tokens are stored encrypted (see crypto.py). $PAPERLESS_TOKEN is a fallback for the
+first administrator account only (the administrator with the lowest id).
 """
+import logging
 import os
 import time
+from urllib.parse import urlsplit
 
 import httpx
 
-from . import db
+from . import crypto, db
 
+log = logging.getLogger("uvicorn.error")
 URL = os.environ.get("PAPERLESS_URL", "").rstrip("/")
 ENV_TOKEN = os.environ.get("PAPERLESS_TOKEN", "")
 DEFAULT_TAG = os.environ.get("PAPERLESS_TAG", "medical")
@@ -22,35 +26,64 @@ _cache = {}  # user id -> (time, documents)
 
 
 class PaperlessError(Exception):
-    pass
+    """The message is plain text for the user."""
+
+
+def _origin(url):
+    u = urlsplit(url)
+    return (u.scheme.lower(), u.netloc.lower())
+
+
+def encrypt_old_tokens():
+    """Older versions stored the token as plain text. Encrypt it once, at start."""
+    for uid, cfg in db.all_kv("paperless"):
+        if cfg.get("token"):
+            cfg["tokenEnc"] = crypto.encrypt(cfg.pop("token"))
+            db.set_kv(uid, "paperless", cfg)
+
+
+def forget(uid):
+    """Drops the cached documents of a user (new settings, or the user is gone)."""
+    _cache.pop(uid, None)
 
 
 def user_config(uid):
+    """Returns (token, tag, token_is_from_server)."""
     cfg = db.get_kv(uid, "paperless", {})
-    token = cfg.get("token") or (ENV_TOKEN if uid == 1 else "")
-    return token, cfg.get("tag") or DEFAULT_TAG
+    own = crypto.decrypt(cfg.get("tokenEnc"))
+    if own:
+        return own, cfg.get("tag") or DEFAULT_TAG, False
+    env = ENV_TOKEN if ENV_TOKEN and uid == db.first_admin_id() else ""
+    return env, cfg.get("tag") or DEFAULT_TAG, bool(env)
 
 
 def public_config(uid):
     """What the Profile screen may see. The token itself never leaves the server."""
-    cfg = db.get_kv(uid, "paperless", {})
-    token, tag = user_config(uid)
+    token, tag, from_server = user_config(uid)
     return {"available": bool(URL), "url": PUBLIC_URL, "tag": tag, "hasToken": bool(token),
-            "tokenFromServer": bool(token and not cfg.get("token"))}
+            "tokenFromServer": from_server}
 
 
 def save_config(uid, token=None, tag=None):
-    cfg = db.get_kv(uid, "paperless", {})
-    if token is not None:
-        cfg["token"] = token.strip()
-    if tag is not None:
-        cfg["tag"] = tag.strip()
-    db.set_kv(uid, "paperless", cfg)
-    _cache.pop(uid, None)
+    """An empty token removes the user's own token."""
+    with db.transaction():
+        cfg = db.get_kv(uid, "paperless", {})
+        cfg.pop("token", None)
+        if token is not None:
+            token = token.strip()
+            if token:
+                cfg["tokenEnc"] = crypto.encrypt(token)
+            else:
+                cfg.pop("tokenEnc", None)
+        if tag is not None:
+            cfg["tag"] = tag.strip()
+        db.set_kv(uid, "paperless", cfg)
+    forget(uid)
 
 
 def _get_all(client, path, params=None):
-    """Follows Paperless pagination ("next") and returns all results."""
+    """Follows Paperless pagination ("next") and returns all results.
+    Follows only links to the Paperless address, so the token is never sent elsewhere."""
     out, url = [], f"{URL}{path}"
     while url:
         r = client.get(url, params=params)
@@ -58,11 +91,14 @@ def _get_all(client, path, params=None):
         data = r.json()
         out.extend(data["results"])
         url, params = data.get("next"), None
+        if url and _origin(url) != _origin(URL):
+            log.warning("Paperless sent a page link to another address (%s). It was not followed.", _origin(url)[1])
+            break
     return out
 
 
 def list_documents(uid, force=False):
-    token, tag = user_config(uid)
+    token, tag, _ = user_config(uid)
     if not URL or not token:
         return []
     hit = _cache.get(uid)
@@ -72,13 +108,17 @@ def list_documents(uid, force=False):
     try:
         with httpx.Client(headers=headers, timeout=20, follow_redirects=True) as c:
             docs = _get_all(c, "/api/documents/", {"tags__name__iexact": tag, "page_size": 100, "ordering": "-created"})
-            names = lambda path: {x["id"]: x["name"] for x in _get_all(c, path, {"page_size": 1000})}
+            def names(path):
+                return {x["id"]: x["name"] for x in _get_all(c, path, {"page_size": 1000})}
             correspondents = names("/api/correspondents/")
             types = names("/api/document_types/")
     except httpx.HTTPStatusError as e:
         raise PaperlessError(f"Paperless answered {e.response.status_code}. Check your Paperless token in Profile.") from e
     except httpx.HTTPError as e:
         raise PaperlessError("Cannot reach Paperless. Ask the administrator to check PAPERLESS_URL.") from e
+    except (ValueError, KeyError, TypeError) as e:
+        log.warning("Unexpected answer from Paperless: %r", e)
+        raise PaperlessError("Paperless sent an answer that the diary cannot read.") from e
 
     result = [{
         "id": d["id"],

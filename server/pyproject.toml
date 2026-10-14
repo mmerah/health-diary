@@ -1,0 +1,20 @@
+[tool.ruff]
+line-length = 130
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E731"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI dependencies are declared this way.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
+
+[tool.ruff.lint.per-file-ignores]
+# Sample Apple Health XML has long lines.
+"tests/*" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Starlette 1.x prefers httpx2 for its test client; httpx still works and the app uses it for Paperless.
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient` is deprecated"]

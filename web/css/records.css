@@ -1,0 +1,33 @@
+/* Records screen (js/screens/records.js): documents from Paperless. */
+.records-lead { margin-top: -12px; }
+.records-body { display: flex; flex-direction: column; gap: var(--gap-in); }
+.records-loading svg { animation: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .records-loading svg { animation: records-spin 1.4s linear infinite; }
+  @keyframes records-spin { to { transform: rotate(360deg); } }
+}
+.records-tools { display: flex; flex-direction: column; gap: 10px; }
+.records-search input { padding-left: 14px; }
+.records-count { margin: 0; }
+
+.docs { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--gap-in); }
+.doc { gap: 8px; }
+.doc-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.doc-date { font-size: 0.875rem; color: var(--muted); }
+.doc-title { font-size: 1.1rem; overflow-wrap: anywhere; }
+.doc-from { color: var(--muted); overflow-wrap: anywhere; }
+.doc-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; border-top: 1px solid var(--line); padding-top: 4px; margin-top: 4px; }
+.doc-actions .btn.ghost { margin-right: -10px; }
+.doc.is-excluded .doc-title, .doc.is-excluded .doc-meta, .doc.is-excluded .doc-from { opacity: 0.6; }
+.doc-text-box > summary { color: var(--accent); font-size: 0.95rem; }
+.doc-text {
+  margin: 4px 0 0; padding: 12px 14px; max-height: 420px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-family: var(--font-data); font-size: 0.8rem; line-height: 1.5; background: var(--sunk); border-radius: var(--r-sm); color: var(--ink);
+}
+
+@media (min-width: 1000px) {
+  .records-tools { flex-direction: row; flex-wrap: wrap; align-items: center; }
+  .records-search { flex: 1 1 320px; max-width: 420px; }
+  .records-count { flex-basis: 100%; }
+  .docs { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+}

@@ -1,31 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Health Diary</title>
-<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="A private health diary you host yourself: daily log, Apple Health data, medical documents and reports.">
+<meta name="theme-color" data-scheme="light" content="#EEF1EE" media="(prefers-color-scheme: light)">
+<meta name="theme-color" data-scheme="dark" content="#0E1311" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Health Diary">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.png" type="image/png">
+<link rel="apple-touch-icon" href="icon.png">
+<script src="theme.js"></script>
+<script src="config.js"></script>
 <link rel="stylesheet" href="fonts.css">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/today.css">
+<link rel="stylesheet" href="css/body.css">
+<link rel="stylesheet" href="css/records.css">
+<link rel="stylesheet" href="css/report.css">
+<link rel="stylesheet" href="css/profile.css">
+<link rel="stylesheet" href="css/print.css" media="print">
+<script type="module" src="js/main.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#view">Skip to content</a>
 
 <header class="topbar">
   <div class="topbar-in">
-    <span class="brand">Health Diary</span>
-    <span class="demo" id="demo-badge" hidden>Demo · sample data</span>
-    <span class="status" id="save-status" aria-live="polite"></span>
+    <span class="brand"><img src="icon.png" alt="" width="24" height="24">Health Diary</span>
+    <span class="demo-badge" id="demo-badge" hidden title="Sample data only. Do not enter real health data.">Demo</span>
+    <span class="save-status" id="save-status" aria-live="polite"></span>
+    <button class="icon-btn theme-btn" id="theme-btn" type="button"></button>
   </div>
 </header>
 
-<main id="view" class="view"></main>
+<main id="view" class="view" tabindex="-1"></main>
+
+<button class="fab" id="fab" type="button" aria-label="Quick add" hidden>
+  <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+</button>
 
 <nav class="tabbar" aria-label="Screens">
-  <button data-tab="today"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="M8 14.5h4"/></svg><span>Today</span></button>
-  <button data-tab="body"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="M8 9.5a5.5 5.5 0 0 1 8 0"/><path d="M12 9.5l1.5-2"/></svg><span>Body</span></button>
-  <button data-tab="docs"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg><span>Documents</span></button>
-  <button data-tab="report"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2-5 3 10 2.5-7 1.5 2h5"/></svg><span>Report</span></button>
-  <button data-tab="profile"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span>Profile</span></button>
+  <button type="button" data-tab="today"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="M8 14.5h4"/></svg><span>Today</span></button>
+  <button type="button" data-tab="body"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17l5-6 4 4 4-7 5 6"/><path d="M3 21h18"/></svg><span>Trends</span></button>
+  <button type="button" data-tab="records"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg><span>Records</span></button>
+  <button type="button" data-tab="report"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2-5 3 10 2.5-7 1.5 2h5"/></svg><span>Report</span></button>
+  <button type="button" data-tab="profile"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span>Profile</span></button>
 </nav>
 
+<div id="sheet-root"></div>
 <div class="toast" id="toast" role="status" hidden></div>
-
-<script src="util.js"></script>
-<script src="api.js"></script>
-<script src="report.js"></script>
-<script src="app.js"></script>
+</body>
+</html>

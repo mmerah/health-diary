@@ -1,0 +1,50 @@
+/* Print and "Save as PDF": only the report, on A4, black on white. Linked with media="print". */
+@page { size: A4; margin: 14mm 14mm 16mm; }
+
+:root, :root[data-theme="dark"] {
+  --bg: #fff; --surface: #fff; --sunk: #F2F4F3; --ink: #111; --muted: #4A524E; --line: #C9CFCB;
+  --accent: #1F48C4; --accent-soft: #EEF2FC; --ok: #24693F; --ok-soft: #E3F1E8;
+  --caution: #7A4A00; --caution-soft: #FBF0DC; --high: #A3223A; --high-soft: #F9E4E8;
+  color-scheme: light;
+}
+html, body { background: #fff !important; color: #111; padding: 0 !important; margin: 0; }
+body { font-size: 10.5pt; line-height: 1.4; }
+
+/* App chrome and the settings are not printed. */
+.topbar, .tabbar, .fab, .toast, .skip-link, #sheet-root, .screen-head, .rp-intro, .rp-settings, .rp-bar, .rp-more-btn, .notice { display: none !important; }
+.view { max-width: none !important; padding: 0 !important; margin: 0 !important; display: block !important; }
+.rp-layout { display: block !important; }
+.rp-out { position: static !important; max-height: none !important; display: block !important; }
+.rp-preview { overflow: visible !important; padding: 0 !important; margin: 0 !important; display: block !important; }
+
+.rp-doc { box-shadow: none !important; border-radius: 0; padding: 0 !important; gap: 14pt; font-size: 10pt; }
+.rp-head { border-bottom-width: 1.5pt; }
+.rp-head h1 { font-size: 17pt; }
+.rp-sec { break-inside: auto; gap: 6pt; }
+.rp-sec h2 { font-size: 12.5pt; break-after: avoid; }
+.rp-sec h3, .rp-sub { break-after: avoid; }
+.rp-flag, .rp-docitem, .rp-day, .rp-stats > div, tr { break-inside: avoid; }
+.table-wrap { overflow: visible !important; }
+/* Denser summary on paper */
+.rp-meas { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4pt 14pt; align-items: start; }
+.rp-meas-block { break-inside: avoid; }
+.rp-stats { grid-template-columns: repeat(5, minmax(0, 1fr)) !important; }
+/* The summary pages first; the daily log starts on a new page. */
+.rp-sec[aria-labelledby="rp-daily"] { break-before: page; }
+.rp-days { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6pt; align-items: start; }
+.rp-day { padding: 5pt 7pt; font-size: 8.5pt; }
+.rp-day ul { font-size: 8.5pt; }
+.rp-table { font-size: 8.8pt; }
+.rp-table thead { display: table-header-group; }
+.rp-table th, .rp-table td { padding: 3pt 5pt; }
+.rp-text { font-size: 8pt; }
+.pill, .rp-lab-flag { border: 0.6pt solid currentColor; }
+.rp-day { background: none; border: 0.6pt solid var(--line); }
+.rp-conclusion { background: none; }
+a { color: inherit; text-decoration: none; }
+
+/* AI mode: print the text as it is. */
+.rp-md-wrap { box-shadow: none !important; }
+.rp-md-wrap.is-collapsed .rp-md { max-height: none !important; overflow: visible !important; }
+.rp-md-wrap::after { display: none !important; }
+.rp-md { font-size: 8.5pt; padding: 0; }

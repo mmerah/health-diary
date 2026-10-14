@@ -1,0 +1,165 @@
+/* Report screen: settings, the doctor report preview (.rp-doc) and the AI text preview (.rp-md).
+   Only tokens from base.css. Phone first: one column and a sticky action bar above the tab bar.
+   From 1000px: settings on the left, the preview on the right (sticky). Print styles: css/print.css. */
+
+.rp { display: flex; flex-direction: column; gap: 12px; }
+.rp-intro { margin-top: -4px; }
+.rp-layout { display: flex; flex-direction: column; gap: var(--gap); min-width: 0; }
+
+/* ---------- Settings */
+.rp-settings { gap: 20px; }
+.rp-settings .seg button { min-height: var(--touch); }
+.rp-fs { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.rp-fs legend { padding: 0; margin-bottom: 6px; }
+.rp-fs .seg { margin-bottom: 6px; }
+.rp-include { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding-block: 2px; }
+.rp-include > summary { justify-content: flex-start; }
+.rp-include-sum { font-weight: 400; font-size: 0.9rem; }
+.rp-include-body { display: flex; flex-direction: column; gap: 20px; padding: 8px 0 16px; }
+.rp-doclist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.rp-doclist .check { align-items: flex-start; padding-block: 6px; }
+.rp-doclist .check input { margin-top: 2px; }
+.rp-doclist .check > span { display: flex; flex-direction: column; min-width: 0; }
+.rp-doclist-title { font-weight: 700; overflow-wrap: anywhere; }
+.rp-doclist .sub { font-size: 0.85rem; color: var(--muted); }
+
+/* ---------- Output column */
+.rp-out { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.rp-preview { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.rp-loading { padding: 24px 4px; }
+
+/* Action bar: sticky at the bottom on phones, above the tab bar. */
+.rp-bar {
+  position: sticky; z-index: 5;
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + 8px);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 10px; border-radius: var(--r);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: saturate(1.4) blur(12px); -webkit-backdrop-filter: saturate(1.4) blur(12px);
+  box-shadow: var(--shadow-lift);
+}
+.rp-bar { padding: 8px; gap: 6px; }
+.rp-bar .btn { flex: 1 1 auto; font-size: 0.875rem; padding-inline: 10px; }
+.rp.is-ai .rp-bar .btn.primary { flex: 1 1 60%; }
+.rp-tokens { font-family: var(--font-data); font-size: 0.85rem; color: var(--muted); white-space: nowrap; padding-inline: 4px; }
+
+/* ---------- AI text preview */
+.rp-md-wrap { position: relative; border-radius: var(--r); background: var(--surface); box-shadow: var(--shadow); }
+.rp-md {
+  margin: 0; padding: 16px; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-family: var(--font-data); font-size: 0.8rem; line-height: 1.5; color: var(--ink); border-radius: var(--r);
+}
+/* About 25 lines, then a fade and "Show full report". */
+.rp-md-wrap.is-collapsed .rp-md { max-height: calc(25 * 1.5 * 0.8rem + 32px); overflow: hidden; }
+.rp-md-wrap.is-collapsed::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 72px; border-radius: 0 0 var(--r) var(--r);
+  background: linear-gradient(to bottom, transparent, var(--surface)); pointer-events: none;
+}
+.rp-more-btn { align-self: center; }
+
+/* ---------- Doctor report (also printed) */
+.rp-doc {
+  background: var(--surface); border-radius: var(--r); box-shadow: var(--shadow);
+  padding: 20px 16px 24px; display: flex; flex-direction: column; gap: 22px; min-width: 0;
+  font-size: 0.95rem;
+}
+.rp-head { display: flex; flex-direction: column; gap: 6px; padding-bottom: 14px; border-bottom: 2px solid var(--ink); }
+.rp-kicker { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.rp-head h1 { font-size: 1.45rem; }
+.rp-meta { color: var(--muted); font-size: 0.9rem; }
+.rp-meta strong { color: var(--ink); font-size: 1rem; }
+.rp-question { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 10px 14px; border-radius: 0 var(--r-sm) var(--r-sm) 0; }
+.rp-q-label { display: block; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); }
+
+.rp-sec { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.rp-sec h2 { font-size: 1.1rem; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+.rp-sec h3 { font-size: 0.95rem; margin-top: 6px; }
+.rp-note, .rp-muted { color: var(--muted); font-size: 0.875rem; }
+.rp-sub { font-weight: 700; font-size: 0.9rem; }
+.rp-block { display: block; }
+.rp-nowrap { white-space: nowrap; }
+.rp-mono { font-family: var(--font-data); font-size: 0.8rem; }
+.rp-syms { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.rp-symrow { display: flex; flex-direction: column; gap: 2px; padding: 10px 0; border-top: 1px solid var(--line); font-size: 0.9rem; }
+.rp-symrow:first-child { border-top: 0; padding-top: 0; }
+.rp-symrow.is-flag { border-left: 3px solid var(--caution); padding-left: 10px; }
+.rp-symhead { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 0.95rem; }
+.rp-symdays { font-family: var(--font-data); font-size: 0.85rem; }
+.rp-weekly { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rp-list { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 4px; }
+
+.rp-flags { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.rp-flag { display: flex; gap: 10px; align-items: flex-start; }
+.rp-flag .pill { flex: none; min-width: 58px; justify-content: center; margin-top: 1px; }
+
+.rp-dl { display: grid; grid-template-columns: minmax(96px, max-content) 1fr; gap: 6px 16px; margin: 0; }
+.rp-dl dt { font-weight: 700; color: var(--muted); font-size: 0.875rem; }
+.rp-dl dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+
+.rp-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 0; }
+.rp-stats > div { background: var(--sunk); border-radius: var(--r-sm); padding: 10px 12px; }
+.rp-stats dt { font-size: 0.8rem; font-weight: 700; color: var(--muted); }
+.rp-stats dd { margin: 2px 0 0; font-family: var(--font-data); font-size: 0.9rem; font-variant-numeric: tabular-nums; }
+.rp-stats dd span { display: block; font-family: var(--font-body); font-size: 0.8rem; color: var(--muted); }
+
+.rp-table { font-size: 0.875rem; }
+.rp-table th, .rp-table td { padding: 6px 8px; }
+.rp-compact th, .rp-compact td { padding: 4px 8px; }
+.rp-table tr.is-flag td { background: color-mix(in srgb, var(--caution-soft) 60%, transparent); }
+.rp-table tr.is-before td { color: var(--muted); font-style: italic; }
+.rp-compact td:first-child { white-space: nowrap; }
+.rp-assoc { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; font-size: 0.9rem; }
+.rp-daily tr.is-symptom td:first-child { font-weight: 700; }
+.rp-lab-flag { display: inline-block; font-family: var(--font-body); font-size: 0.72rem; font-weight: 700; padding: 1px 6px; border-radius: 999px; }
+.rp-lab-flag.is-high { background: var(--high-soft); color: var(--high); }
+.rp-lab-flag.is-low { background: var(--caution-soft); color: var(--caution); }
+.rp-sym { display: inline-block; margin-right: 8px; white-space: nowrap; }
+.rp-sym::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; background: var(--muted); vertical-align: 1px; }
+.rp-sym.sev-1::before { background: var(--ok); }
+.rp-sym.sev-2::before { background: var(--caution); }
+.rp-sym.sev-3::before { background: var(--high); }
+
+/* Weekly mini bars: height steps 0–4; the number is in the label */
+.rp-spark { display: inline-flex; align-items: flex-end; gap: 2px; height: 18px; vertical-align: middle; }
+.rp-sb { display: block; width: 5px; border-radius: 1px; background: var(--accent); }
+.rp-spark .rp-h0 { height: 2px; background: var(--line); }
+.rp-spark .rp-h1 { height: 5px; }
+.rp-spark .rp-h2 { height: 9px; }
+.rp-spark .rp-h3 { height: 13px; }
+.rp-spark .rp-h4 { height: 18px; }
+
+.rp-docs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.rp-docitem { display: flex; flex-direction: column; gap: 4px; padding-top: 10px; border-top: 1px solid var(--line); }
+.rp-docitem:first-child { border-top: 0; padding-top: 0; }
+.rp-date { font-family: var(--font-data); font-size: 0.85rem; color: var(--muted); margin-right: 4px; }
+.rp-conclusion { margin: 4px 0 0; padding: 8px 12px; border-left: 3px solid var(--line); background: var(--sunk); border-radius: 0 var(--r-sm) var(--r-sm) 0; }
+.rp-text { margin: 4px 0 0; padding: 10px 12px; background: var(--sunk); border-radius: var(--r-sm); white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-data); font-size: 0.78rem; line-height: 1.5; }
+
+.rp-days { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.rp-day { padding: 8px 12px; border-radius: var(--r-sm); background: var(--sunk); }
+.rp-day.is-symptom { border-left: 3px solid var(--caution); }
+.rp-day-date { font-weight: 700; font-size: 0.9rem; }
+.rp-day ul { margin: 4px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; font-size: 0.875rem; }
+.rp-k { font-weight: 700; color: var(--muted); }
+.rp-foot { border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: 0.8rem; }
+
+/* ---------- Wide screens: two columns, the preview stays in view */
+@media (min-width: 700px) {
+  .rp-doc { padding: 28px 32px 32px; }
+  .rp-days { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+}
+@media (min-width: 1000px) {
+  .rp-layout {
+    display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); grid-template-rows: auto 1fr;
+    align-items: start; gap: 12px 24px;
+  }
+  .rp-settings { grid-column: 1; grid-row: 1 / span 2; }
+  .rp-bar { grid-column: 2; grid-row: 1; top: 64px; bottom: auto; box-shadow: var(--shadow); background: var(--surface); }
+  .rp-bar .btn { flex: 0 1 auto; padding-inline: 16px; }
+  .rp.is-ai .rp-bar .btn.primary { flex: 0 1 auto; }
+  .rp-bar .rp-tokens { margin-left: auto; }
+  .rp-out { grid-column: 2; grid-row: 2; position: sticky; top: 136px; max-height: calc(100vh - 152px); }
+  .rp-preview { overflow-y: auto; overscroll-behavior: contain; padding: 2px; margin: -2px; }
+  .rp-md-wrap.is-collapsed .rp-md { max-height: none; overflow: visible; }
+  .rp-md-wrap.is-collapsed::after, .rp-more-btn { display: none; }
+}

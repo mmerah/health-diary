@@ -69,17 +69,32 @@ This app holds health data. Please read this before you install it.
 
 - **Keep it private.** Run it on a private network (Tailscale, VPN, home LAN). Do not open it to the
   internet, and do not use Tailscale Funnel for it.
-- **Use HTTPS.** Tailscale (`*.ts.net`) and most reverse proxies do this for you.
+- **Use HTTPS.** Tailscale (`*.ts.net`) and most reverse proxies do this for you. Behind a reverse
+  proxy on another host or container, set `FORWARDED_ALLOW_IPS` to its address. Only then does the
+  app read the client address and HTTPS from the proxy headers.
 - **Accounts:** passwords are hashed with scrypt. Logins use secure, HttpOnly, SameSite cookies.
-  After 5 wrong passwords in 15 minutes, the app waits before it accepts more tries.
+  After 5 wrong passwords for one username from one address in 15 minutes, the app waits before it
+  accepts more tries from that address. Someone else's wrong guesses cannot lock you out.
   A new password logs out the user's other devices.
-- **First account:** only a person with the setup code from the server log can create it.
+- **First account:** only a person with the setup code from the server log can create it. The code
+  is long (more than 128 bits), and the number of tries is limited.
+- **Administrators:** when an administrator sets a new password for a user, the user sees a notice at
+  the next login. User changes are written to the server log. The last administrator cannot be
+  removed.
+- **Your data:** in Profile, each user can download all their data as a file, and delete their
+  account with all their data.
 - **Shortcut keys:** each user has a personal key. The server stores only its hash. You can replace
-  or turn off a key in Profile.
+  or turn off a key in Profile. Profile shows when the key was last used.
 - **Data isolation:** users never see each other's diaries. Deleting a user deletes their data.
+  Deleted data is overwritten in the database file.
+- **Checks:** the server checks every request: size, fields and values. Requests from other sites are
+  refused. Uploads are limited in size, and zip bombs are refused.
 - **Browser:** a strict Content Security Policy. The app loads no outside scripts, fonts or trackers.
-- **At rest:** the database is a plain SQLite file in `./data`. Protect the host and its backups
-  (disk encryption, file permissions). Anyone with access to the file can read the diaries.
+- **At rest:** the database is a SQLite file in `./data`, readable only by the app user. Paperless
+  tokens in it are encrypted with `DIARY_SECRET_KEY`. The diaries themselves are not encrypted:
+  protect the host and its backups (disk encryption, file permissions).
+- **Container:** it runs as `PUID:PGID` with a read-only file system, no added privileges and only
+  the capabilities that the start script needs to set the owner of `./data`.
 - **AI reports:** the anonymization removes the common identifiers, not all of them. Add other words
   (lab or hospital names) in the report settings, and always read a report before you share it.
 
@@ -94,19 +109,29 @@ Copy the `data` folder. For a safe copy while the app runs:
 docker exec health-diary python -c "import sqlite3; sqlite3.connect('/data/diary.db').backup(sqlite3.connect('/data/backup.db'))"
 ```
 
+Keep `DIARY_SECRET_KEY` (or `data/secret.key`) too, but not in the same place as the backup.
+Without the key, users must save their Paperless token again. With the key next to the backup,
+anyone with the backup can read the tokens.
+
+Each user can also download their own data as a JSON file, in Profile.
+
 ## Settings (`.env`)
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `TZ` | `UTC` | Time zone. Days start at midnight in this zone. |
+| `TZ` | `UTC` | Time zone. Days start at midnight in this zone. Set it: the log warns if it is missing. |
 | `PUID`, `PGID` | `1000` | Owner of `./data`. The app runs as this user. |
+| `DIARY_SECRET_KEY` | `data/secret.key` | Key that encrypts the Paperless tokens. Make one with `openssl rand -base64 32`. |
 | `PAPERLESS_URL` | | Paperless address, as the container reaches it. |
 | `PAPERLESS_PUBLIC_URL` | `PAPERLESS_URL` | Paperless address for links on your devices. |
 | `PAPERLESS_TAG` | `medical` | Default tag. Each user can change it. |
-| `PAPERLESS_TOKEN` | | Optional token for the first account only. Other users save their own. |
+| `PAPERLESS_TOKEN` | | Optional token for the first administrator (the oldest administrator account) only. Other users save their own. |
 | `SETUP_CODE` | random | Fixed code for the first account. |
 | `SESSION_DAYS` | `30` | Days before a login expires. It renews while you use the app. |
 | `COOKIE_SECURE` | `auto` | `true` or `false` to force the Secure cookie flag. |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Addresses of reverse proxies whose `X-Forwarded-*` headers the app trusts. Never `*`. |
+| `MAX_IMPORT_MB` | `2048` | Largest Apple Health upload, in MB. |
+| `MAX_IMPORT_UNPACKED_MB` | `4096` | Largest size the upload may unpack to, in MB. |
 
 ## Development
 

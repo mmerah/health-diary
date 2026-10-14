@@ -1,0 +1,88 @@
+/* Profile screen (js/screens/profile*.js) and the login / first-setup screen (js/screens/auth.js). */
+
+/* ---------- Layout */
+.profile-views { align-self: flex-start; min-width: min(100%, 320px); }
+.profile-views button { min-height: 44px; font-size: 0.95rem; }
+.profile-content { display: flex; flex-direction: column; gap: var(--gap-in); }
+.profile-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--gap-in); align-items: start; }
+.profile-col { display: flex; flex-direction: column; gap: var(--gap-in); min-width: 0; }
+.form-card { gap: 16px; }
+.form-card h3 { font-size: 1rem; }
+@media (min-width: 1000px) {
+  .profile-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+  .profile-col { gap: 20px; }
+  .form-card { padding: 20px 24px; }
+}
+
+/* ---------- Medication */
+.med-list > li { align-items: flex-start; padding-block: 10px; flex-wrap: wrap; }
+.med-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); flex: none; margin-top: 2px; }
+.med-icon svg { width: 18px; height: 18px; }
+.med-name { display: block; overflow-wrap: anywhere; }
+.med-dose { display: block; overflow-wrap: anywhere; }
+.med-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.med-row.is-stopped .med-icon { background: var(--sunk); color: var(--muted); }
+.med-row.is-stopped .med-name, .med-row.is-stopped .med-dose { color: var(--muted); }
+.med-stopped > summary { color: var(--accent); font-size: 0.95rem; }
+.med-empty { padding: 12px 8px; }
+.med-empty p { max-width: 40ch; }
+@media (max-width: 420px) {
+  .med-actions { width: 100%; justify-content: flex-end; margin-top: -4px; }
+}
+.switch { align-items: flex-start; }
+.switch input { margin-top: 2px; }
+.switch > span { display: flex; flex-direction: column; font-weight: 700; }
+.switch-hint { font-weight: 400; }
+
+/* ---------- Settings */
+.settings-card > p:not(.hint) { overflow-wrap: anywhere; }
+.settings-card.is-demo { background: var(--caution-soft); box-shadow: none; }
+.why { display: flex; gap: 8px; align-items: flex-start; }
+.why svg { width: 18px; height: 18px; flex: none; margin-top: 1px; }
+.copy-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.copy-row .tag { flex: 1 1 200px; padding: 10px 12px; font-size: 0.85rem; line-height: 1.4; }
+.key-status { display: flex; flex-direction: column; gap: 6px; }
+.key-status p { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--muted); }
+.secret-box { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: var(--r-sm); background: var(--accent-soft); }
+.secret { display: block; font-family: var(--font-data); font-size: 0.9rem; padding: 10px 12px; border-radius: 8px; background: var(--surface); overflow-wrap: anywhere; user-select: all; }
+.settings-more > summary { color: var(--accent); }
+.settings-more[open] > summary { margin-bottom: 8px; }
+.danger-zone > summary { color: var(--high); }
+.danger-zone[open] { padding: 0 14px 14px; border-radius: var(--r-sm); background: var(--high-soft); }
+.danger-zone[open] > summary { padding-top: 0; }
+.pw-hint[data-level="short"], .pw-hint[data-level="weak"] { color: var(--caution); font-weight: 700; }
+.pw-hint[data-level="strong"] { color: var(--ok); font-weight: 700; }
+#imp-status.is-error { color: var(--high); font-weight: 700; }
+input[type="file"] { padding: 8px; }
+
+/* Users */
+.user-row { flex-direction: column; align-items: stretch !important; padding-block: 12px !important; gap: 8px !important; }
+.user-top { display: flex; align-items: center; gap: 8px; }
+.user-top strong { overflow-wrap: anywhere; }
+.user-actions .btn { flex: 0 1 auto; }
+.user-pw-form { padding: 12px; border-radius: var(--r-sm); background: var(--sunk); }
+
+/* ---------- Login and first setup (auth.js). body.is-auth is set by main.js. */
+body.is-auth .view { min-height: calc(100vh - 140px); justify-content: center; }
+.auth { width: 100%; max-width: 440px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+.auth-card { padding: 28px 24px 24px; gap: 18px; }
+.auth-head { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; }
+.auth-head img { width: 64px; height: 64px; border-radius: 16px; box-shadow: var(--shadow); }
+.auth-head h1 { font-size: 1.7rem; }
+.auth-head p { color: var(--muted); max-width: 34ch; }
+.auth-form { display: flex; flex-direction: column; gap: 14px; }
+.auth-form .btn.primary { width: 100%; min-height: 48px; font-size: 1rem; margin-top: 4px; }
+.pw-wrap { position: relative; display: flex; }
+.pw-wrap input { padding-right: 84px; }
+.pw-toggle {
+  position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+  min-height: var(--touch); min-width: var(--touch); padding: 0 12px; border: 0; border-radius: 9px; background: transparent;
+  font: inherit; font-size: 0.875rem; font-weight: 700; color: var(--accent); cursor: pointer;
+}
+.pw-toggle:hover { background: var(--sunk); }
+.auth-error { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: var(--r-sm); background: var(--high-soft); color: var(--ink); font-weight: 700; }
+.auth-error svg { color: var(--high); flex: none; margin-top: 1px; }
+.auth-error:empty { display: none; }
+.auth-foot { text-align: center; color: var(--muted); font-size: 0.875rem; }
+.code-input { font-family: var(--font-data); letter-spacing: 0.04em; text-transform: uppercase; }
+.code-input::placeholder { text-transform: none; letter-spacing: 0; }

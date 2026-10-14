@@ -14,33 +14,42 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: pip install -r server/requirements-dev.txt
-      - run: python -m pytest -q server/tests
-      - uses: actions/setup-node@v4
+      - name: Lint
+        run: ruff check server
+      - name: Test
+        run: python -m pytest -q server/tests
+      - name: Check dependencies for known vulnerabilities
+        run: |
+          pip install pip-audit==2.10.1
+          pip-audit --require-hashes --disable-pip -r server/requirements.txt
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
       - name: Check JavaScript syntax
-        run: for f in web/*.js; do node --check "$f"; done
+        run: for f in $(find web -name '*.js' -not -path '*/fonts/*'); do node --check "$f"; done
+      - name: Test JavaScript
+        run: if [ -d web/tests ]; then node --test "web/tests/*.test.js"; fi
 
   image:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         if: github.event_name != 'pull_request'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
@@ -48,7 +57,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64

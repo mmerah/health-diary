@@ -39,6 +39,10 @@ const WEEKDAYS = new Set(['mon', 'monday', 'tue', 'tues', 'tuesday', 'wed', 'wed
   'ven', 'vendredi', 'sam', 'samedi', 'dim', 'dimanche']);
 // Month words that are also common words: without a year they count only when capitalised ("May 3", not "may 3").
 const AMBIGUOUS = new Set(['may', 'mar', 'ago', 'set', 'gen', 'mag']);
+// Italian short months that are also words ("2 Ago?", "3 set"): a month only with a year.
+// Italian writes month names in lower case, so a capital letter proves nothing.
+const NEEDS_YEAR = new Set(['ago', 'set', 'gen', 'mag']);
+const notAMonth = (word, y) => !y && (NEEDS_YEAR.has(fold(word)) || (AMBIGUOUS.has(fold(word)) && !/^\p{Lu}/u.test(word)));
 
 const monthOf = w => MONTHS[fold(w).replace(/\.$/, '')] || null;
 
@@ -126,7 +130,7 @@ export function findDates(text, { nowYear, ref = null } = {}) {
         const y = m[4] ? Number(m[4]) : null;
         const d1 = Number(m[1]), d2 = Number(m[2]);
         if (!mo || d1 >= d2 || !valid(y, mo, d1) || !valid(y, mo, d2)) continue;
-        if (!y && AMBIGUOUS.has(fold(m[3])) && !/^\p{Lu}/u.test(m[3])) continue;
+        if (notAMonth(m[3], y)) continue;
         // Two dates: the first day alone ("1er"), then "3 octobre 2026".
         const end1 = m.indices[1][1] + (/^(?:st|nd|rd|th|er|re|e)?/i.exec(s.slice(m.indices[1][1]))[0].length);
         add(m.index, end1, y, mo, d1, { kind: 'text' });
@@ -139,7 +143,7 @@ export function findDates(text, { nowYear, ref = null } = {}) {
         mo = monthOf(word);
         if (!mo) continue;
         // Without a year, "may" and "mar" are words, not months, unless capitalised.
-        if (!y && AMBIGUOUS.has(fold(word)) && !/^\p{Lu}/u.test(word)) continue;
+        if (notAMonth(word, y)) continue;
         if (p.kind === 'text-md' && !y && !/^\p{Lu}/u.test(word)) continue;
         if (p.kind === 'text-md' && !y && fold(word) === 'may') continue; // "May 2 tablets"
       } else {

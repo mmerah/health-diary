@@ -14,6 +14,7 @@ const r = makeRedactor({
 const run = s => r.text(s, { ref: '2026-10-14' });
 
 const MUST_KEEP = [
+  '2 Ago?', '3 Set da 10 pezzi', 'Gen 2 attiva', // Italian words, not months, without a year (round 8)
   'INR 2.4 (2.0 - 3.0)', 'MMSE 26/30', 'Dottore di ricerca', 'Ing. dell’opera',
   '2019 Appendektomie',
   '2019 Appendectomy\n2022 Pneumonia',
@@ -88,6 +89,11 @@ const MUST_KEEP = [
 ];
 
 const MUST_HIDE = [
+  // A name after a verb, small words, then "by" / "par" (review round 8).
+  ['Seen today by Sarah Connor', 'Seen today by [name]'],
+  ['Examined in clinic by Dr Patel', 'Examined in clinic by [name]'],
+  ['Vue en consultation par Claire Martin', 'Vue en consultation par [name]'],
+  ['il 2 ago 2026', 'il D-74'],
   // Italian titles and a lab word after a name (review round 7).
   ['Dott. Rossi', 'Dott. [name]'],
   ['Dott.ssa Bianchi', 'Dott.ssa [name]'],

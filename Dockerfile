@@ -1,7 +1,10 @@
 # python:3.14-slim, pinned by digest. Dependabot proposes updates (.github/dependabot.yml).
 FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
 
+# Set by CI: the release (e.g. 0.1.0, or 0.1.0-3-g6aa67db after it), the commit and the build time.
 ARG APP_VERSION=dev
+ARG APP_COMMIT=
+ARG APP_BUILT=
 # FORWARDED_ALLOW_IPS: uvicorn trusts X-Forwarded-For/-Proto only from these addresses.
 # Behind a reverse proxy on another host or container, set it to the proxy's address in .env.
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -9,7 +12,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DATA_DIR=/data \
     WEB_DIR=/app/web \
     FORWARDED_ALLOW_IPS=127.0.0.1 \
-    APP_VERSION=${APP_VERSION}
+    APP_VERSION=${APP_VERSION} \
+    APP_COMMIT=${APP_COMMIT} \
+    APP_BUILT=${APP_BUILT}
 
 WORKDIR /app
 # requirements.txt has a hash for every package: pip refuses anything else.

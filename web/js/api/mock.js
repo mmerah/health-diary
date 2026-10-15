@@ -122,4 +122,9 @@ export class MockApi {
   }
 
   async resetDemo() { this.db = seed(); this.persist(); }
+  /** The demo build writes its version into config.js (scripts/build_demo.sh). */
+  async about() {
+    const c = window.DIARY_CONFIG || {};
+    return { ok: true, version: c.version || 'dev', commit: c.commit || '', built: c.built || '' };
+  }
 }

@@ -1,159 +1,217 @@
 # iPhone shortcut: "Health Diary"
 
-The shortcut reads Apple Health, sends the data to your NAS, then opens the diary.
-You make it once, by hand, in the **Shortcuts** app. It takes about 20 minutes.
-
-Replace `health-diary.tailXXXX.ts.net` with your own address everywhere below.
-
-> **The name must be exactly `Health Diary`.** The **Sync again** button in the app
-> starts the shortcut by its name.
+This shortcut reads Apple Health data and sends it to your diary. Then it opens the diary.
+You make the shortcut one time, by hand, in the **Shortcuts** app.
 
 ## Before you start
 
-- In the diary, open **Profile → Apple Health sync → Create key**. Copy the key.
-  Each user has their own key. It tells the server whose diary the data belongs to.
-- Tailscale on the iPhone: turn on **VPN On Demand**, so the shortcut can reach the NAS.
-- In Shortcuts, a "variable" is the result of an earlier action. To use one, tap the
-  field, then pick it in the bar above the keyboard. To get a property (for example
-  *Start Date*), tap the variable after you insert it.
+You need:
+- **Tailscale** on the iPhone, with **VPN On Demand** on. The shortcut cannot reach the diary without it.
+- **The diary address**. In this guide it is `https://health-diary.<your-tailnet>.ts.net`. Use your own address.
+- **The shortcut key**. In the diary, open **Profile → Settings → Apple Health sync**. Tap **Create key**. Copy the key.
+- About **20 minutes**.
 
-## Actions, in order
+How to use variables:
+- To put a variable in a field, tap the field. Then tap the variable in the bar above the keyboard.
+- To use a property of a variable (for example *Start Date*), tap the variable in the field. Then select the property.
+- To change the date format of a date variable, tap the variable in the field. Then set **Date Format**.
 
-### 1. Today's date
+## Procedure
 
-1. **Date** (leave it on *Current Date*).
-2. **Format Date** → Date Format: **Custom** → `yyyy-MM-dd`.
-3. **Set Variable** → name: `Today`.
+### 1. Create the shortcut
 
-### 2. Sleep (last night)
+1. Open the **Shortcuts** app. Tap **+**.
+2. Tap the name at the top. Tap **Rename**. Type `Health Diary`. Use exactly this name.
+   The diary starts the shortcut by this name.
 
-4. **Find Health Samples**
-   - Type: **Sleep Analysis**
-   - Filter: **Start Date** is in the last **2 days**
-   - Sort by: **Start Date**, Oldest First
-5. **Repeat with Each** (input: *Health Samples*). Inside the loop:
-6. **Text**. Type exactly this, with the four variables from *Repeat Item*:
+To add an action, type its name in the search field at the bottom. Tap the action. Keep the order of this procedure.
 
-   ```
-   [Value]|[Start Date]|[End Date]|[Source]
-   ```
+### 2. Date
 
-   For **Start Date** and **End Date**: tap the variable → Date Format: **ISO 8601**,
-   and turn on **Include Time**.
-7. After **End Repeat**: **Combine Text** (input: *Repeat Results*) with **New Lines**.
-8. **Set Variable** → name: `Sleep`.
+3. **Date**: keep *Current Date*.
+4. **Set Variable**: Variable Name `Now`. Input: *Date*.
+5. **Format Date**
+   - Date: *Now*. Date Format: **ISO 8601**. Include ISO 8601 Time: **off**.
+6. **Set Variable**: Variable Name `Today`. Input: *Formatted Date*. The value is like `2026-10-15`.
+7. **Adjust Date**
+   - Tap **Add**. Select **Subtract**. Type `1`. Select **days**. Date: *Now*.
+8. **Adjust Date**
+   - Tap **Add**. Select **Get Start of Day**. Date: *Adjusted Date* (from step 7).
+9. **Set Variable**: Variable Name `Since`. Input: *Adjusted Date* (from step 8). This is yesterday at 00:00.
 
-The server picks the best source when the iPhone and the Watch both recorded sleep.
-English and French labels both work (Core / Principal, Deep / Profond, and so on).
+### 3. Sleep
 
-### 3. Steps (yesterday and today)
+10. **Find Health Samples**
+    - Type: **Sleep Analysis**. Start Date: **is between** *Since* and *Now*.
+    - Limit: **off**.
+11. **Repeat with Each**: Input *Health Samples*.
+12. **Text** (inside the repeat). Type the line below. Each `[...]` is a property of *Repeat Item*:
 
-9. **Find Health Samples**
-   - Type: **Steps**
-   - Filter: **Start Date** is in the last **2 days**
-   - Group By: **Day**
-10. **Repeat with Each**, then a **Text** with the same pattern as in step 6:
-    `[Value]|[Start Date]|[End Date]`
-11. **Combine Text** with **New Lines** → **Set Variable** → name: `Steps`.
+    ```
+    [Value]|[Start Date]|[End Date]|[Source]
+    ```
 
-"Group By Day" gives one total per day and removes double counts from the iPhone and the Watch.
+    - For **Start Date** and **End Date**: Date Format **ISO 8601**, Include ISO 8601 Time **on**.
+    - Do not type spaces around `|`.
+13. **Combine Text** (after **End Repeat**): Input *Repeat Results*. Separator: **New Lines**.
+14. **Set Variable**: Variable Name `Sleep`. Input: *Combined Text*.
 
-### 4. Resting heart rate and HRV (yesterday and today)
+A correct line is like `Core|2026-10-14T23:30:00+02:00|2026-10-15T01:00:00+02:00|Apple Watch`.
+If your lines show other date text, the date format is wrong.
 
-12. **Find Health Samples**
-    - Type: **Resting Heart Rate**
-    - Filter: **Start Date** is in the last **2 days**
-    - Group By: **Day**
-13. **Repeat with Each**, then a **Text** with the same pattern as in step 10:
-    `[Value]|[Start Date]|[End Date]`
-14. **Combine Text** with **New Lines** → **Set Variable** → name: `RestingHR`.
-15. Do steps 12 to 14 again with Type: **Heart Rate Variability**. Name the variable `HRV`.
+### 4. Steps
 
-The server puts each value on the day of its start date. When there are several HRV values
-for one day, it uses their average.
+15. **Find Health Samples**
+    - Type: **Steps**. Start Date: **is between** *Since* and *Now*.
+    - Group By: **Day**. Limit: **off**.
+16. **Repeat with Each**: Input *Health Samples*.
+17. **Text** (inside the repeat). Use *Repeat Item*, with the same date format as step 12:
 
-### 5. Weight (optional, if a scale writes to Apple Health)
+    ```
+    [Value]|[Start Date]|[End Date]
+    ```
 
-16. **Find Health Samples** → Type: **Weight**, Filter: **Start Date** is in the last **1 days**,
-    Sort by **Start Date**, **Latest First**, **Limit 1**.
-17. **Get Details of Health Sample** → **Value** → **Set Variable** `Weight`.
-18. Again on the same sample: **Get Details** → **Start Date** (ISO 8601, with time)
-    → **Set Variable** `WeightDate`.
+18. **Combine Text** (after **End Repeat**): Input *Repeat Results*. Separator: **New Lines**.
+19. **Set Variable**: Variable Name `Steps`. Input: *Combined Text*.
 
-If no weight was recorded, these variables stay empty and the server ignores them.
-Pounds and stones also work: the server reads `170 lb`, `170 lbs` and `12 st`. If the value has
-no unit, add the field `weight_unit` (`kg`, `lb` or `st`) in step 19.
+**Group By: Day** gives one total for each day. It does not count iPhone and Apple Watch steps two times.
 
-### 6. Send to the NAS
+### 5. Resting heart rate
 
-19. **Get Contents of URL**
-    - URL: `https://health-diary.tailXXXX.ts.net/api/ingest/health`
-    - Method: **POST**
-    - Headers: add one header. Key: `Authorization`. Value: the word `Bearer`, one space, then your key.
-      Example: `Bearer 3vQ…`. Do not add quotes.
-    - Request Body: **JSON**, with these fields:
+20. Do steps 15 to 19 again, with these changes:
+    - Type: **Resting Heart Rate**.
+    - Group By: **None**. The diary calculates the average for each day.
+    - Variable Name: `RestingHR`.
 
-    | Key | Type | Value |
+### 6. HRV
+
+21. Do steps 15 to 19 again, with these changes:
+    - Type: **Heart Rate Variability**.
+    - Group By: **None**.
+    - Variable Name: `HRV`.
+
+### 7. Weight (optional)
+
+Do this section only if a scale or an app writes your weight to Apple Health.
+
+22. **Find Health Samples**
+    - Type: **Weight**. Start Date: **is between** *Since* and *Now*.
+    - Sort by: **Start Date**. Order: **Latest First**. Limit: **on**, **1**.
+23. **Text**. Use the properties of *Health Samples* (from step 22). Type one space between them:
+
+    ```
+    [Value] [Unit]
+    ```
+
+24. **Set Variable**: Variable Name `Weight`. Input: *Text*. The value is like `76.9 kg` or `170 lb`.
+25. **Text**. Type the property **Start Date** of *Health Samples* (from step 22).
+    - Date Format **ISO 8601**, Include ISO 8601 Time **on**.
+26. **Set Variable**: Variable Name `WeightDate`. Input: *Text*.
+
+The unit is necessary. Without it, the diary reads the number as kg.
+If there is no weight, the variables are empty and the diary ignores them.
+
+### 8. Send
+
+27. **Get Contents of URL**
+    - URL: `https://health-diary.<your-tailnet>.ts.net/api/ingest/health`
+    - Tap the arrow to show more settings.
+    - Method: **POST**.
+    - Headers: tap **Add new header**. Key: `Authorization`. Value: `Bearer`, one space, then your key.
+      Example: `Bearer 3vQx...`. Do not type quotes.
+    - Request Body: **JSON**. Tap **Add new field** for each row of this table:
+
+    | Key | Type | Value (variable) |
     |---|---|---|
-    | `date` | Text | `Today` |
-    | `sleep` | Text | `Sleep` |
-    | `steps_days` | Text | `Steps` |
-    | `resting_hr` | Text | `RestingHR` |
-    | `hrv` | Text | `HRV` |
-    | `weight` | Text | `Weight` |
-    | `weight_date` | Text | `WeightDate` |
+    | `date` | Text | *Today* |
+    | `sleep` | Text | *Sleep* |
+    | `steps_days` | Text | *Steps* |
+    | `resting_hr_days` | Text | *RestingHR* |
+    | `hrv_days` | Text | *HRV* |
+    | `weight` | Text | *Weight* (only with section 7) |
+    | `weight_date` | Text | *WeightDate* (only with section 7) |
 
-### 7. Open the diary
+    Type the keys exactly as shown. The diary refuses unknown keys.
 
-20. **Open URLs** → `https://health-diary.tailXXXX.ts.net/`
+### 9. Open the diary
 
-## Finish
+28. **Open URLs**: `https://health-diary.<your-tailnet>.ts.net/`
 
-- Name the shortcut **Health Diary**.
-- Run it once by hand. iOS asks for access to Health data: allow all the types above.
-- Tap the shortcut's **ⓘ** → **Add to Home Screen**. Use this icon to open the diary.
-  Each tap syncs and then opens the app.
+### 10. Finish
 
-## Optional: sync during the day without opening anything
+29. Tap **Done**. Tap the shortcut to run it one time.
+30. iOS asks for access to Health data. Allow all the data types in the list.
+31. Add the shortcut to the Home Screen:
+    - On the shortcut, tap **⋯**. Tap **ⓘ** (Details) at the bottom.
+    - Tap **Add to Home Screen**. Tap **Add**.
 
-Shortcuts → **Automation** → **+** → **Time of Day** (for example 13:00 and 21:00)
-→ **Run Immediately** → action **Run Shortcut: Health Diary**.
-iOS blocks Health data while the phone is locked. If the phone is locked at that time,
-this run fails without harm and the next one catches up.
+Use this Home Screen icon to open the diary. Each tap sends new data, then opens the diary.
 
-## Check that it works
+## Do a test
 
-Open the diary: the Apple Health card on Today shows your sleep and steps, and
-Profile shows "Last data received". A `401` answer means the key is wrong: create a new one.
+1. Add the action **Show Result** after **Get Contents of URL**. Input: *Contents of URL*.
+2. Run the shortcut. Read the result. Then remove **Show Result**.
 
-If it fails, test the server from a terminal:
+| Result | Meaning | What to do |
+|---|---|---|
+| `{"ok": true, "date": ...}` | The diary received the data. | Nothing. Open **Today**: the Apple Health card shows sleep and steps. |
+| `401` / "Missing or wrong shortcut key" | The key is wrong or missing. | Check the header: `Bearer`, one space, the key. Or create a new key. |
+| `400` / "Some values are not valid: ..." | The message names a wrong key or value. | Compare the request body with the table in step 27. *Today* must be like `2026-10-15`. |
+| `400` / "Could not read the data" | `weight_date` is not ISO 8601. | Check the date format in step 25. |
+| `429` / "Too many syncs" | More than 30 sends in 10 minutes. | Wait for the time in the message. |
+| Network error, or no answer | The iPhone cannot reach the diary. | Turn on Tailscale. Check the address. |
+
+**Profile → Settings → Apple Health sync** shows **Last data received** after each good send.
+
+To test the diary without the iPhone, use a computer on your tailnet:
 
 ```sh
-curl -X POST https://health-diary.tailXXXX.ts.net/api/ingest/health \
+curl -X POST https://health-diary.<your-tailnet>.ts.net/api/ingest/health \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer YOUR-KEY' \
   -d '{"steps_days": "1234|2026-10-14T00:00:00+02:00|2026-10-15T00:00:00+02:00"}'
 ```
 
-## What the server accepts
+## Optional: sync automatically
 
-All fields are optional.
+The automation must not open the diary each time. Use a copy of the shortcut without **Open URLs**.
+
+1. Touch and hold **Health Diary**. Tap **Duplicate**.
+2. Rename the copy `Health Diary sync`. Remove the action **Open URLs**.
+3. Tap **Automation** → **+** (or **New Automation**) → **Time of Day**.
+4. Set the time (for example 21:00) and **Daily**. Select **Run Immediately**. Tap **Next**.
+5. Select **Health Diary sync**.
+
+iOS blocks Health data while the iPhone is locked. Then the automation sends nothing or stops. This does no harm. The next run sends the missing data.
+
+## Fields that the diary accepts
+
+All fields are optional. Use the type **Text** for all of them in Shortcuts. A "line" is `value|start|end`, and dates are ISO 8601 with time.
 
 | Field | Format |
 |---|---|
-| `date` | `YYYY-MM-DD`. The day of the data. Default: today on the server. |
-| `sleep` | Lines `value\|start\|end\|source`. Dates in ISO 8601. |
-| `steps_days` | Lines `value\|start\|end` (one per day). Updates up to 7 days back. |
-| `steps` | Number. Today's steps. |
-| `steps_yesterday` | Number. Yesterday's final steps. |
-| `resting_hr_days`, `hrv_days` | Lines `value\|start\|end`. Each value goes to the day of its start date. HRV values of one day are averaged. Updates up to 7 days back. |
-| `resting_hr`, `hrv` | Numbers, for `date`. Older shortcuts send these. |
-| `weight` | A number in kg, or with a unit: `170 lb`, `170 lbs`, `12 st`. |
-| `weight_unit` | `kg`, `lb` or `st`, for a weight without a unit. Default: `kg`. |
-| `weight_date` | ISO 8601 date-time of the weight. The same weight is stored once. Without it, the server keeps one weight per day. |
+| `date` | `YYYY-MM-DD`. The day of the sync. Default: today on the server. |
+| `sleep` | Lines `value\|start\|end\|source`. The diary uses the night that ends on `date`. |
+| `steps_days` | Lines, one for each day. Updates `date` and up to 7 days before. |
+| `resting_hr_days`, `hrv_days` | Lines. Each value goes to the day of its start date. The diary uses the average of each day. Up to 7 days before `date`. |
+| `steps`, `steps_yesterday`, `resting_hr`, `hrv` | One number. Old format: use the `_days` fields. |
+| `weight` | Number with unit: `76.9 kg`, `170 lb`, `12 st`. A number without unit is kg. |
+| `weight_unit` | `kg`, `lb` or `st`. For a `weight` without unit. |
+| `weight_date` | ISO 8601 date and time of the weight. The diary keeps each weight one time. |
 | `workouts` | Lines `type\|start\|end`. |
 
-Numbers can use a decimal comma (`46,7`) and thousands separators (`2 140`, `12,345`).
-Values that cannot be true (for example 500 000 steps) are ignored. Other fields are refused.
+Sleep values in English and French are accepted: Core/Principal, Deep/Profond, REM/Paradoxal, Awake/Éveillé, In Bed/Au lit, Asleep/Endormi.
+Numbers can have a decimal comma (`46,7`), a unit (`46 ms`) and thousands separators (`2 140`, `12,345`).
+The diary ignores values that are not possible (for example 500 000 steps).
+A sync never changes a value that you corrected by hand in the diary.
 
-Values you corrected by hand in the app are never overwritten by a sync.
+## Troubleshooting
+
+- **Sync now does not start the shortcut**: the shortcut name is not exactly `Health Diary`.
+- **No data, no error**: in the Health app, tap your picture → **Apps** → **Shortcuts**. Turn on all the types.
+- **Steps too high**: set **Group By: Day** in step 15.
+- **Sleep or bedtime wrong**: set Date Format **ISO 8601** with time on Start Date and End Date (step 12).
+- **Weight too high**: add `[Unit]` after `[Value]` in step 23.
+- **Error at night or in the morning**: the iPhone was locked. Run the shortcut again with the iPhone unlocked.
+
+Note: the action and option names are from iOS 18 and iOS 26 in English. They can be different in other iOS versions or languages.

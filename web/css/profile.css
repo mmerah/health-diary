@@ -92,3 +92,11 @@ body.is-auth .view { min-height: calc(100vh - 140px); justify-content: center; }
 /* Inline errors (form-fields.js): icon and words */
 .field-error { display: flex; gap: 6px; align-items: flex-start; }
 .field-error svg { width: 16px; height: 16px; flex: none; margin-top: 2px; }
+
+/* About card */
+.about-list { margin: 0; display: grid; gap: 6px; }
+.about-list > div { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.about-list dt { color: var(--muted); }
+.about-list dd { margin: 0; font-weight: 700; text-align: right; overflow-wrap: anywhere; }
+.about-links { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.about-links a { display: flex; align-items: center; min-height: var(--touch); font-weight: 700; }

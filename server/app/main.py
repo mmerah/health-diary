@@ -23,6 +23,8 @@ from python_multipart.multipart import MultipartParser, parse_options_header
 from . import auth, crypto, db, health, models, paperless
 
 VERSION = os.environ.get("APP_VERSION", "dev")
+COMMIT = os.environ.get("APP_COMMIT", "")
+BUILT = os.environ.get("APP_BUILT", "")
 WEB_DIR = Path(os.environ.get("WEB_DIR", Path(__file__).resolve().parents[2] / "web"))
 DATE = r"^\d{4}-\d{2}-\d{2}$"
 DEFAULT_SETTINGS = {"lastSync": None, "redactWords": [], "excludedDocs": []}
@@ -576,7 +578,8 @@ async def import_apple_health(request: Request, user=User):
 
 @app.get("/api/health")
 def server_health():
-    return {"ok": True, "version": VERSION}
+    """Public: the app version, for the About card and for bug reports."""
+    return {"ok": True, "version": VERSION, "commit": COMMIT, "built": BUILT}
 
 
 # ---------- Web app

@@ -100,4 +100,6 @@ export class HttpApi {
     return false; // the page is about to change
   }
   async resetDemo() {}
+  /** { version, commit, built } of the running server. */
+  about() { return this.req('/health'); }
 }

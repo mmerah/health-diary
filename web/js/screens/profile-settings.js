@@ -12,12 +12,13 @@ let S = null; // { settings, paperless, users }
 /** Loads what the Settings view needs. Parts the server cannot give are null. */
 export async function loadSettings(ctx) {
   const { api, user } = ctx;
-  const [settings, paperless, users] = await Promise.all([
+  const [settings, paperless, users, about] = await Promise.all([
     api.getSettings(),
     api.can.paperless && !api.isDemo ? api.getPaperless() : null,
     api.can.accounts && user && user.isAdmin ? api.listUsers() : null,
+    api.about().catch(() => null),
   ]);
-  S = { settings: settings || {}, paperless, users };
+  S = { settings: settings || {}, paperless, users, about };
   return S;
 }
 
@@ -128,6 +129,32 @@ function displayCard(ctx) {
     <p class="hint">Auto follows the setting of your device. Saved on this device only.</p>`);
 }
 
+const REPO = 'https://github.com/mmerah/health-diary';
+
+/** Version, build and links. "0.1.0" is a release; "0.1.0-3-g6aa67db" is 3 commits after it. */
+function aboutCard() {
+  const a = S.about || {};
+  const version = a.version || 'unknown';
+  const release = /^\d+\.\d+\.\d+$/.test(version);
+  const commit = /^[0-9a-f]{7,40}$/.test(a.commit || '') ? a.commit : '';
+  const built = a.built && !Number.isNaN(Date.parse(a.built))
+    ? new Date(a.built).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+  const link = (href, text) => `<a href="${esc(href)}" target="_blank" rel="noopener">${esc(text)}</a>`;
+  return card('set-about', 'About', `
+    <dl class="about-list">
+      <div><dt>Version</dt><dd class="num">${esc(version)}${release ? '' : ' <span class="pill">Not a release</span>'}</dd></div>
+      ${commit ? `<div><dt>Commit</dt><dd class="num">${link(`${REPO}/commit/${commit}`, commit.slice(0, 7))}</dd></div>` : ''}
+      ${built ? `<div><dt>Built</dt><dd>${esc(built)}</dd></div>` : ''}
+    </dl>
+    <ul class="about-links">
+      <li>${link(release ? `${REPO}/releases/tag/v${version}` : `${REPO}/releases`, 'What is new (release notes)')}</li>
+      <li>${link(`${REPO}/issues/new/choose`, 'Report a problem')}</li>
+      <li>${link(`${REPO}/security/advisories/new`, 'Report a security problem privately')}</li>
+      <li>${link(REPO, 'Source code (MIT license)')}</li>
+    </ul>
+    <p class="hint">Give the version when you report a problem. Never put real health data in a report.</p>`);
+}
+
 function accountCard(ctx) {
   const { api, user } = ctx;
   const who = `<p>Logged in as <strong>${esc(user.username)}</strong>${user.isAdmin ? ' <span class="pill info">Administrator</span>' : ''}</p>`;
@@ -216,7 +243,7 @@ export function settingsView(ctx) {
   return `${api.isDemo ? demoCard() : ''}
     <div class="profile-grid">
       <div class="profile-col">${displayCard(ctx)}${appleCard(ctx)}${paperlessCard(ctx)}</div>
-      <div class="profile-col">${accountCard(ctx)}${showUsers ? usersCard(ctx) : ''}</div>
+      <div class="profile-col">${accountCard(ctx)}${showUsers ? usersCard(ctx) : ''}${aboutCard()}</div>
     </div>`;
 }
 

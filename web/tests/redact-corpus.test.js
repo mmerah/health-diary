@@ -14,6 +14,7 @@ const r = makeRedactor({
 const run = s => r.text(s, { ref: '2026-10-14' });
 
 const MUST_KEEP = [
+  'Seen today by GP', 'Referred by ER', 'Followed up by phone', 'Seen by cardiology', // roles, not names (round 9)
   '2 Ago?', '3 Set da 10 pezzi', 'Gen 2 attiva', // Italian words, not months, without a year (round 8)
   'INR 2.4 (2.0 - 3.0)', 'MMSE 26/30', 'Dottore di ricerca', 'Ing. dell’opera',
   '2019 Appendektomie',

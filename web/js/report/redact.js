@@ -100,7 +100,9 @@ const NOT_WORD_AFTER = String.raw`(?![\p{L}\p{N}])`;
 // Lab and test words are never part of a person's name: "Dr. Müller INR 2.4" keeps INR.
 const LAB_WORD = String.raw`(?:INR|MMSE|HbA1c|HbA|Hb|TSH|fT3|fT4|CRP|PCT|LDL|HDL|BMI|PSA|ALT|AST|GGT|ALP|LDH|CK|eGFR|GFR|BNP|NT-proBNP|ECG|EKG|EEG|EMG|MRI|IRM|MRT|CT|PET|SpO2|HRV|VES|PVC|FEV1|FVC|INR-Wert|Quick)`;
 // A name token: a capitalised or all-caps word (with inner hyphens), an initial "L.", or an already hidden name.
-const TOK = String.raw`(?:\[name\]|(?!${LAB_WORD}(?![\p{L}\p{N}]))\p{Lu}[\p{L}'’]*(?:-\p{Lu}[\p{L}'’]*)*\.?)`;
+// Roles and services are not names either: "Seen today by GP" keeps GP.
+const ROLE_WORD = String.raw`(?:GP|GPs|ER|ED|ICU|IMC|CCU|A&E|OPD|NHS|SAMU|SMUR|MD|RN|NP|PA)`;
+const TOK = String.raw`(?:\[name\]|(?!(?:${LAB_WORD}|${ROLE_WORD})(?![\p{L}\p{N}]))\p{Lu}[\p{L}'’]*(?:-\p{Lu}[\p{L}'’]*)*\.?)`;
 const PART = String.raw`(?:de|du|des|la|le|van|von|der|den|di|da|del|della|dos|das|el|al|ben|bin|De|Du|Van|Von|Le|La|Del|Da|Di)`;
 const GLUED = String.raw`(?:[dDlL]['’])`;
 const NAME = String.raw`(?:${PART}[ \t]+){0,2}${GLUED}?${TOK}(?:(?:[ \t]+(?:${PART}[ \t]+){0,2}|[ \t]*${GLUED}|[ \t]+${GLUED})${TOK}){0,3}`;

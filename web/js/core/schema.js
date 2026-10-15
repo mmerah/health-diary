@@ -42,6 +42,11 @@ export function periodOf(hm) {
   return (PERIODS.find(p => (p.from < p.until ? m >= p.from && m < p.until : m >= p.from || m < p.until)) || {}).key;
 }
 
+/** Types for documents kept in the diary. The server suggests one from the text; the user confirms.
+    Paperless documents keep the type they have in Paperless. */
+export const DOC_CATEGORIES = ['Blood test', 'Cardiology', 'Imaging', 'Consultation letter', 'Prescription',
+  'Hospital stay', 'Vaccination', 'Other'];
+
 /** Common symptoms, offered as one-tap chips. Users can add any other name. */
 export const SYMPTOMS = ['Fatigue', 'Headache', 'Palpitations', 'Dizziness', 'Short of breath', 'Chest tightness',
   'Bloating', 'Nausea', 'Back pain', 'Joint pain'];

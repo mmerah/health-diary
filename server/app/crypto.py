@@ -1,4 +1,5 @@
-"""Encrypts secrets that the server must store and read back (Paperless tokens).
+"""Encrypts what the server must store and read back: Paperless tokens, and uploaded documents
+with their text.
 
 The key comes from $DIARY_SECRET_KEY. Without it, the server makes $DATA_DIR/secret.key
 on the first start. A copy of the database alone then does not reveal the tokens,
@@ -47,3 +48,13 @@ def decrypt(blob):
     except InvalidToken:
         log.warning("Cannot decrypt a stored secret. Was DIARY_SECRET_KEY changed?")
         return None
+
+
+def encrypt_bytes(data):
+    """For document files. Fernet also authenticates: a changed file is refused, not misread."""
+    return _fernet.encrypt(data)
+
+
+def decrypt_bytes(blob):
+    """Raises InvalidToken if the key changed or the file is damaged."""
+    return _fernet.decrypt(blob)

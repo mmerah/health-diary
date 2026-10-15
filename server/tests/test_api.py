@@ -1,5 +1,7 @@
+import io
 import json
 import sqlite3
+import zipfile
 
 from conftest import PW, login, new_client
 
@@ -197,7 +199,7 @@ def test_validation_errors_are_plain(c):
 
 
 def test_documents_without_paperless(c):
-    assert c.get("/api/documents").json() == []
+    assert c.get("/api/documents").json() == {"documents": [], "paperless": {"ok": True, "error": None}}
     assert c.get("/api/me/paperless").json()["available"] is False
 
 
@@ -272,14 +274,15 @@ def test_export_and_delete_my_account(c):
     e.post("/api/me/ingest-token")
 
     r = e.get("/api/me/export")
-    assert r.status_code == 200
+    assert r.status_code == 200 and r.headers["content-type"] == "application/zip"
     assert r.headers["content-disposition"].startswith('attachment; filename="health-diary-erin-')
-    data = r.json()
-    assert data["version"] == 1 and data["user"]["username"] == "erin"
+    raw = zipfile.ZipFile(io.BytesIO(r.content)).read("data.json")
+    data = json.loads(raw)
+    assert data["version"] == 2 and data["user"]["username"] == "erin" and data["documents"] == []
     assert data["profile"] == {"name": "Erin"} and data["days"][0]["log"] == {"notes": "mine"}
-    assert data["measurements"][0]["value"] == 60 and data["paperless"] == {"tag": "health"}
+    assert data["measurements"][0]["value"] == 60 and data["paperless"]["tag"] == "health"
     assert set(data["settings"]) == {"lastSync", "redactWords", "excludedDocs"}
-    assert "erin-secret-token" not in r.text and "hash" not in r.text
+    assert b"erin-secret-token" not in raw and b"hash" not in raw
 
     uid = data_uid = e.get("/api/auth/status").json()["user"]["id"]
     assert e.request("DELETE", "/api/me", json={"password": "wrong"}).status_code == 400
@@ -318,7 +321,7 @@ def test_passwords_are_hashed(c):
 
 def test_migrations_set_the_version(c):
     with db.connect() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 4
+        assert con.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 5
         assert con.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert con.execute("PRAGMA secure_delete").fetchone()[0] == 1
 

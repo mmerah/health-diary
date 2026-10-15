@@ -66,6 +66,10 @@ def user_config(uid):
     return env, cfg.get("tag") or DEFAULT_TAG, bool(env)
 
 
+def configured(uid):
+    return bool(URL and user_config(uid)[0])
+
+
 def public_config(uid):
     """What the Profile screen may see. The token itself never leaves the server."""
     token, tag, from_server = user_config(uid)
@@ -129,14 +133,16 @@ def list_documents(uid, force=False):
         log.warning("Unexpected answer from Paperless: %r", e)
         raise PaperlessError("Paperless sent an answer that the diary cannot read.") from e
 
+    # documents.py adds the user's own category, date and title (kept in the diary, never sent to Paperless).
     result = [{
         "id": d["id"],
         "date": str(d.get("created") or d.get("created_date") or "")[:10],
         "title": d.get("title") or "Untitled",
-        "category": types.get(d.get("document_type")) or "Document",
+        "type": types.get(d.get("document_type")) or None,
         "correspondent": correspondents.get(d.get("correspondent")) or "",
         "content": d.get("content") or "",
         "url": f"{PUBLIC_URL}/documents/{d['id']}/details",
+        "added": str(d.get("added") or "")[:19] or None,
     } for d in docs]
     _cache[uid] = (time.time(), result)
     return result

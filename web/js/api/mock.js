@@ -11,7 +11,7 @@ export class MockApi {
   constructor() {
     this.isDemo = true;
     // What this back end can do. Screens check these instead of the back-end type.
-    this.can = { sync: true, accounts: false, paperless: false, import: false };
+    this.can = { sync: true, accounts: false, paperless: false, import: false, upload: false };
     let db = null;
     try { db = JSON.parse(localStorage.getItem(KEY)); } catch (e) { /* storage blocked */ }
     // Re-seed when the stored demo is from an earlier day, so dates stay recent.
@@ -93,8 +93,14 @@ export class MockApi {
   }
   async deleteMeasurement(id) { this.db.measurements = this.db.measurements.filter(m => m.id !== id); this.persist(); }
 
-  async listDocuments() { return clone(this.db.documents); }
+  async listDocuments() { return clone(this.db.documents).map(d => ({ source: 'paperless', status: 'ready', ...d })); }
   async refreshDocuments() { return this.listDocuments(); }
+  uploadDocument = demoOnly;
+  async getDocument(id) { return (await this.listDocuments()).find(d => String(d.id) === String(id)) || null; }
+  updateDocument = demoOnly;
+  deleteDocument = demoOnly;
+  retryDocument = demoOnly;
+  documentFileUrl() { return ''; }
 
   async getSettings() { return clone(this.db.settings); }
   async saveSettings(s) {

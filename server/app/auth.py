@@ -210,7 +210,9 @@ LOGIN_IP = Limiter(30, 15 * 60)
 SETUP_IP = Backoff()
 # Shortcut: 30 sends in 10 minutes per user is far more than a shortcut needs.
 INGEST = Limiter(30, 10 * 60)
-LIMITERS = (LOGIN_USER, LOGIN_IP, SETUP_IP, INGEST)
+# Documents: 30 uploads per hour per user. Each one is read with OCR, which takes CPU.
+DOC_UPLOAD = Limiter(30, 60 * 60)
+LIMITERS = (LOGIN_USER, LOGIN_IP, SETUP_IP, INGEST, DOC_UPLOAD)
 
 
 def _too_many(wait, message):

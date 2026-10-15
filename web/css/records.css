@@ -1,9 +1,9 @@
-/* Records screen (js/screens/records.js): documents from Paperless. */
+/* Records screen (js/screens/records.js): documents in the diary and from Paperless. */
 .records-lead { margin-top: -12px; }
 .records-body { display: flex; flex-direction: column; gap: var(--gap-in); }
 .records-loading svg { animation: none; }
 @media (prefers-reduced-motion: no-preference) {
-  .records-loading svg { animation: records-spin 1.4s linear infinite; }
+  .records-loading svg, .doc-status svg { animation: records-spin 1.4s linear infinite; }
   @keyframes records-spin { to { transform: rotate(360deg); } }
 }
 .records-tools { display: flex; flex-direction: column; gap: 10px; }
@@ -30,4 +30,37 @@
   .records-search { flex: 1 1 320px; max-width: 420px; }
   .records-count { flex-basis: 100%; }
   .docs { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+}
+
+/* Header actions */
+.records-head-actions { justify-content: flex-end; }
+.records-head-actions .btn svg { width: 16px; height: 16px; }
+.records-filters { display: flex; flex-direction: column; gap: 8px; }
+.records-filters:empty { display: none; }
+
+/* Empty state: the two ways to add documents */
+.records-empty { gap: 8px; }
+.records-empty .empty { padding-bottom: 8px; }
+.records-empty .empty p { max-width: 46ch; }
+.records-ways { margin: 0 auto; padding-left: 1.2em; max-width: 52ch; display: flex; flex-direction: column; gap: 8px; color: var(--ink); }
+.records-empty-actions { justify-content: center; padding-top: 8px; }
+
+/* One document */
+.doc-tags { display: inline-flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.doc-source { background: transparent; box-shadow: inset 0 0 0 1px var(--line); }
+.doc-buttons { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-left: auto; }
+.doc-status { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: var(--r-sm); background: var(--sunk); color: var(--ink); font-weight: 700; }
+.doc-status svg { width: 18px; height: 18px; flex: none; color: var(--accent); }
+.doc-failed { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border-radius: var(--r-sm); background: var(--high-soft); }
+.doc-failed > svg { color: var(--high); flex: none; margin-top: 2px; }
+.doc-failed > div { display: flex; flex-direction: column; gap: 8px; }
+.doc-check { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: var(--r-sm); background: var(--accent-soft); }
+.doc-check p { font-size: 0.925rem; }
+.doc-check-values { display: flex; flex-wrap: wrap; gap: 2px 6px; }
+.filter-row { display: flex; flex-direction: column; gap: 4px; }
+.filter-label { font-size: 0.8rem; font-weight: 700; color: var(--muted); }
+.doc-origin { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: var(--r-sm); background: var(--sunk); }
+@media (min-width: 1000px) {
+  .filter-row { flex-direction: row; align-items: center; gap: 10px; }
+  .filter-label { min-width: 3.5em; }
 }

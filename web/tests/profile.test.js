@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { dateTimeLabel, formatSetupCode, medStatus, newPasswordError, parseHeight, parseMedForm, passwordHint, sortMeds } from '../js/screens/profile-account.js';
-import { filterDocs, categoriesOf } from '../js/screens/records-data.js';
+import { categoriesOf, changedFields, excludedList, excludedSet, filterDocs, NO_TYPE, sourcesOf, suggestionDiff, untypedCount, uploadError } from '../js/screens/records-data.js';
 import { mergeProfile } from '../js/screens/profile-merge.js';
 
 const TODAY = '2026-10-14';
@@ -107,4 +107,48 @@ test('mergeProfile: a delete there wins over no change here; a change here survi
 
 test('mergeProfile without a base keeps the local copy', () => {
   assert.equal(mergeProfile(null, { name: 'A', medications: [] }, { name: 'B', medications: [] }).name, 'A');
+});
+
+test('records: source filter, sources, newest first with createdAt as tie-break', () => {
+  const docs = [
+    { id: 'd1', source: 'diary', date: '2026-06-01', createdAt: '2026-10-01T10:00', title: 'A' },
+    { id: 'd2', source: 'diary', date: '2026-06-01', createdAt: '2026-10-02T10:00', title: 'B' },
+    { id: 7, date: '2026-01-01', title: 'C' },
+  ];
+  assert.deepEqual(filterDocs(docs).map(d => d.id), ['d2', 'd1', 7]);
+  assert.deepEqual(filterDocs(docs, { source: 'paperless' }).map(d => d.id), [7]);
+  assert.deepEqual(sourcesOf(docs), ['diary', 'paperless']);
+});
+
+test('records: suggestions only when ready and different', () => {
+  const d = { status: 'ready', category: '', date: '2026-10-03', title: 'scan_001', suggested: { category: 'Blood test', date: '2026-10-03', title: 'Blood test – lipids' } };
+  assert.deepEqual(suggestionDiff(d), [{ key: 'category', value: 'Blood test' }, { key: 'title', value: 'Blood test – lipids' }]);
+  assert.deepEqual(suggestionDiff({ ...d, status: 'processing' }), []);
+  assert.deepEqual(suggestionDiff({ ...d, suggested: null }), []);
+});
+
+test('records: excluded ids keep their type', () => {
+  const set = excludedSet([3, 'd12']);
+  assert.ok(set.has('3') && set.has('d12'));
+  assert.deepEqual(excludedList(set), [3, 'd12']);
+});
+
+test('records: upload checks', () => {
+  assert.match(uploadError(null), /Choose a file/);
+  assert.match(uploadError({ name: 'a.docx', type: 'application/msword', size: 10 }), /PDF or a photo/);
+  assert.match(uploadError({ name: 'a.pdf', type: 'application/pdf', size: 26 * 1024 * 1024 }), /25 MB/);
+  assert.equal(uploadError({ name: 'IMG_1.HEIC', type: '', size: 1000 }), '');
+});
+
+test('records: documents without a type, edited fields and changed fields', () => {
+  const docs = [
+    { id: 5, source: 'paperless', category: '', status: 'ready', title: 'Scan', date: '2026-01-02', edited: ['title'],
+      suggested: { category: 'Imaging', title: 'MRI knee', date: '2026-01-02' } },
+    { id: 'd1', source: 'diary', category: 'Blood test', status: 'ready', title: 'Lipids', date: '2026-02-01' },
+    { id: 'd2', source: 'diary', category: '', status: 'processing', title: 'x', date: '2026-02-02' },
+  ];
+  assert.equal(untypedCount(docs), 1);
+  assert.deepEqual(filterDocs(docs, { category: NO_TYPE }).map(d => d.id), ['d2', 5]);
+  assert.deepEqual(suggestionDiff(docs[0]), [{ key: 'category', value: 'Imaging' }]); // the title was set by the user
+  assert.deepEqual(changedFields(docs[1], { date: '2026-02-01', title: 'Lipids, fasting', category: 'Blood test' }), { title: 'Lipids, fasting' });
 });

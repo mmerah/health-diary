@@ -147,8 +147,30 @@ def _v4_versions(c):
     c.execute("ALTER TABLE kv ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
 
 
+def _v5_documents(c):
+    # Documents kept in the diary (without Paperless). The file is on disk, encrypted (documents.py).
+    # content and suggested hold health data, so they are encrypted too. Title, date and category
+    # stay plain: the list needs them.
+    c.execute("""CREATE TABLE documents (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind        TEXT NOT NULL,
+      date        TEXT NOT NULL,
+      title       TEXT NOT NULL,
+      category    TEXT NOT NULL,
+      status      TEXT NOT NULL DEFAULT 'processing',
+      error       TEXT,
+      pages       INTEGER,
+      size        INTEGER NOT NULL,
+      content     TEXT,
+      suggested   TEXT,
+      edited      TEXT NOT NULL DEFAULT '[]',
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')))""")
+    c.execute("CREATE INDEX idx_documents_user ON documents(user_id, date)")
+
+
 # In order. Each step runs in its own transaction and sets user_version to its number.
-MIGRATIONS = [(2, _v2_accounts), (3, _v3_user_fields), (4, _v4_versions)]
+MIGRATIONS = [(2, _v2_accounts), (3, _v3_user_fields), (4, _v4_versions), (5, _v5_documents)]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
@@ -482,6 +504,51 @@ def add_measurements(uid, rows):
         return c.executemany("""INSERT OR IGNORE INTO measurements (user_id, type, date, time, value, source, external_id)
                                 VALUES (?, ?, ?, ?, ?, ?, ?)""",
                              [(uid, t, d, tm, json.dumps(v), s, x) for t, d, tm, v, s, x in rows]).rowcount
+
+
+# ---------- Documents (rows only: documents.py handles files, encryption and text)
+
+def _doc(row):
+    return dict(row) if row else None
+
+
+def add_document(uid, kind, date, title, category, pages, size, edited=()):
+    with connect() as c:
+        cur = c.execute("""INSERT INTO documents (user_id, kind, date, title, category, pages, size, edited)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (uid, kind, date, title, category, pages, size, json.dumps(sorted(edited))))
+        return _doc(c.execute("SELECT * FROM documents WHERE id = ?", (cur.lastrowid,)).fetchone())
+
+
+def get_document(uid, doc_id):
+    """uid None: any user (the background worker)."""
+    with connect() as c:
+        if uid is None:
+            return _doc(c.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone())
+        return _doc(c.execute("SELECT * FROM documents WHERE id = ? AND user_id = ?", (doc_id, uid)).fetchone())
+
+
+def list_documents(uid):
+    with connect() as c:
+        return [_doc(r) for r in c.execute("SELECT * FROM documents WHERE user_id = ? ORDER BY date DESC, id DESC", (uid,))]
+
+
+def processing_documents():
+    with connect() as c:
+        return [r[0] for r in c.execute("SELECT id FROM documents WHERE status = 'processing' ORDER BY id")]
+
+
+def update_document(doc_id, **fields):
+    """Changes the given columns. Returns False if the document is gone."""
+    assert set(fields) <= {"date", "title", "category", "status", "error", "pages", "content", "suggested", "edited"}
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    with connect() as c:
+        return c.execute(f"UPDATE documents SET {sets} WHERE id = ?", (*fields.values(), doc_id)).rowcount > 0
+
+
+def delete_document(uid, doc_id):
+    with connect() as c:
+        return c.execute("DELETE FROM documents WHERE id = ? AND user_id = ?", (doc_id, uid)).rowcount
 
 
 def delete_measurement(uid, mid):

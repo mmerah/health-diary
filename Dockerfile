@@ -17,6 +17,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     APP_BUILT=${APP_BUILT}
 
 WORKDIR /app
+# Text of stored documents: poppler (pdftotext, pdftoppm, pdfinfo) and tesseract OCR in
+# English, French and German. Temporary files go to $DATA_DIR/tmp, not to /tmp (memory).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-eng \
+       tesseract-ocr-fra tesseract-ocr-deu \
+    && rm -rf /var/lib/apt/lists/*
 # requirements.txt has a hash for every package: pip refuses anything else.
 COPY server/requirements.txt .
 RUN pip install --no-cache-dir --require-hashes -r requirements.txt

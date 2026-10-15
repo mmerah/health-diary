@@ -70,6 +70,17 @@ Update: `docker compose pull && docker compose up -d`. Your data in `./data` sta
 4. **Daily sync:** create a shortcut key in **Profile → Settings** and build the shortcut:
    [docs/shortcut.md](docs/shortcut.md).
 
+## Documents without Paperless
+
+You do not need Paperless to keep your medical documents. In **Records**, upload a PDF or a photo
+(JPEG, PNG or WebP, up to 25 MB and 50 pages). The server reads the text in the background: the
+text of the PDF, or OCR (tesseract, in English, French and German) for scans and photos. It then
+suggests a type, a date and a title. Nothing changes until you confirm. The text goes into your
+reports like the text of Paperless documents.
+
+If you use Paperless too, both lists show together. You can set a type, a date or a title for a
+Paperless document in the diary. The diary keeps it for you and never changes Paperless.
+
 ## Security
 
 This app holds health data. Please read this before you install it.
@@ -108,6 +119,12 @@ This app holds health data. Please read this before you install it.
 - **At rest:** the database is a SQLite file in `./data`, readable only by the app user. Paperless
   tokens in it are encrypted with `DIARY_SECRET_KEY`. The diaries themselves are not encrypted:
   protect the host and its backups (disk encryption, file permissions).
+- **Documents:** uploaded files are stored encrypted with `DIARY_SECRET_KEY` in `./data/documents`,
+  and so is their text in the database. The title, date and type of each document are not
+  encrypted: the list needs them. Only PDF, JPEG, PNG and WebP files are accepted, checked by their
+  content, not their name. PDFs with a password are refused. The text is read by external tools
+  (poppler, tesseract) with a time limit and a memory limit, in a private folder that is deleted
+  after. A file is sent back to the browser with a policy that blocks scripts in it.
 - **Container:** it runs as `PUID:PGID` with a read-only file system, no added privileges and only
   the capabilities that the start script needs to set the owner of `./data`.
 - **AI reports:** the anonymization removes the common identifiers, not all of them. Add other words
@@ -125,10 +142,11 @@ docker exec health-diary python -c "import sqlite3; sqlite3.connect('/data/diary
 ```
 
 Keep `DIARY_SECRET_KEY` (or `data/secret.key`) too, but not in the same place as the backup.
-Without the key, users must save their Paperless token again. With the key next to the backup,
-anyone with the backup can read the tokens.
+**Without the key, the uploaded documents cannot be read again**, and users must save their
+Paperless token again. With the key next to the backup, anyone with the backup can read them.
 
-Each user can also download their own data as a JSON file, in Profile.
+Each user can also download their own data, in Profile: a zip file with `data.json` and their
+uploaded documents (not encrypted).
 
 ## Settings (`.env`)
 
@@ -136,7 +154,7 @@ Each user can also download their own data as a JSON file, in Profile.
 |---|---|---|
 | `TZ` | `UTC` | Time zone. Days start at midnight in this zone. Set it: the log warns if it is missing. |
 | `PUID`, `PGID` | `1000` | Owner of `./data`. The app runs as this user. |
-| `DIARY_SECRET_KEY` | `data/secret.key` | Key that encrypts the Paperless tokens. Make one with `openssl rand -base64 32`. |
+| `DIARY_SECRET_KEY` | `data/secret.key` | Key that encrypts the Paperless tokens and the uploaded documents. Make one with `openssl rand -base64 32`. Back it up apart from the data. |
 | `PAPERLESS_URL` | | Paperless address, as the container reaches it. |
 | `PAPERLESS_PUBLIC_URL` | `PAPERLESS_URL` | Paperless address for links on your devices. |
 | `PAPERLESS_TAG` | `medical` | Default tag. Each user can change it. |
@@ -148,6 +166,10 @@ Each user can also download their own data as a JSON file, in Profile.
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Addresses of proxies (Docktail, `tailscale serve`, reverse proxy) whose `X-Forwarded-*` headers the app trusts. See Security. Never `*`. |
 | `MAX_IMPORT_MB` | `2048` | Largest Apple Health upload, in MB. |
 | `MAX_IMPORT_UNPACKED_MB` | `4096` | Largest size the upload may unpack to, in MB. |
+| `MAX_DOC_MB` | `25` | Largest document upload, in MB. |
+| `OCR_WORKERS` | `1` | Documents read at the same time. More is faster, and uses more CPU and memory. |
+| `OCR_LANGS` | `eng+fra+deu` | Languages for OCR. The image has English, French and German. |
+| `OCR_MEMORY_MB` | `1024` | Memory limit for each OCR or PDF tool run. |
 
 ## Development
 

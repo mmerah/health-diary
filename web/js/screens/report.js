@@ -45,8 +45,10 @@ async function loadBase(api) {
   S.profile = profile || {};
   S.settings = { redactWords: [], excludedDocs: [], ...(settings || {}) };
   try {
-    S.docs = await api.listDocuments();
-    S.docsError = null;
+    const docs = await api.listDocuments();
+    // Only documents whose text is read; a Paperless problem leaves out the Paperless documents only.
+    S.docs = docs.filter(d => !d.status || d.status === 'ready');
+    S.docsError = docs.paperlessError || null;
   } catch (e) {
     // Without Paperless the report still works, without documents.
     S.docs = null;
@@ -169,8 +171,9 @@ function previewHtml(built) {
   if (r.error) return `<div class="empty">${ICON.calendar}<p>${esc(r.error)}</p></div>`;
   if (S.loadError) return `<div class="notice is-error" role="alert">${ICON.alert}<div><strong>The data could not load.</strong><p>${esc(S.loadError)}</p><button class="btn" type="button" data-act="retry">Try again</button></div></div>`;
   if (!built) return '<p class="hint rp-loading">Loading…</p>';
-  const docsNote = S.opts.include.documents && S.docs == null
-    ? `<div class="notice is-caution">${ICON.info}<div><p>Documents are left out: they could not be loaded.</p></div></div>` : '';
+  const docsNote = !S.opts.include.documents ? ''
+    : S.docs == null ? `<div class="notice is-caution">${ICON.info}<div><p>Documents are left out: they could not be loaded.</p></div></div>`
+      : S.docsError ? `<div class="notice is-caution">${ICON.info}<div><p>Paperless documents are left out: Paperless could not be reached.</p></div></div>` : '';
   if (S.opts.audience !== 'ai') return `${docsNote}${built.html}`;
   const lines = built.text.split('\n').length;
   const long = lines > PREVIEW_LINES;

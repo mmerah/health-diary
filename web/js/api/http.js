@@ -9,7 +9,7 @@ export class HttpApi {
   constructor(base) {
     this.base = base;
     this.isDemo = false;
-    this.can = { sync: IS_IPHONE, accounts: true, paperless: true, import: true };
+    this.can = { sync: IS_IPHONE, accounts: true, paperless: true, import: true, upload: true };
   }
 
   async req(path, { method = 'GET', body, raw, headers: extra } = {}) {
@@ -84,8 +84,29 @@ export class HttpApi {
   }
   addMeasurement(m) { return this.req('/measurements', { method: 'POST', body: m }); }
   deleteMeasurement(id) { return this.req(`/measurements/${id}`, { method: 'DELETE' }); }
-  listDocuments() { return this.req('/documents'); }
-  refreshDocuments() { return this.req('/documents?refresh=true'); }
+  // Documents: the user's own (source 'diary') and Paperless documents (source 'paperless'), in one list.
+  // When Paperless cannot be reached, the list has the diary documents and list.paperlessError says why.
+  async listDocuments(refresh = false) {
+    const r = await this.req(`/documents${refresh ? '?refresh=true' : ''}`);
+    const docs = r.documents || [];
+    Object.defineProperty(docs, 'paperlessError', { value: r.paperless && r.paperless.error || null, enumerable: false });
+    return docs;
+  }
+  refreshDocuments() { return this.listDocuments(true); }
+  /** Uploads a PDF or photo. fields: { date, title, category } (all optional). Returns the new document (status 'processing'). */
+  uploadDocument(file, fields = {}) {
+    const fd = new FormData();
+    fd.append('file', file);
+    for (const [k, v] of Object.entries(fields)) if (v) fd.append(k, v);
+    return this.req('/documents', { method: 'POST', body: fd });
+  }
+  getDocument(id) { return this.req(`/documents/${encodeURIComponent(id)}`); }
+  updateDocument(id, fields) { return this.req(`/documents/${encodeURIComponent(id)}`, { method: 'PATCH', body: fields }); }
+  deleteDocument(id) { return this.req(`/documents/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
+  /** Reads a failed document again. Returns the document (status 'processing'). */
+  retryDocument(id) { return this.req(`/documents/${encodeURIComponent(id)}/retry`, { method: 'POST' }); }
+  /** Address of the original file (PDF or image), to open in a new tab. */
+  documentFileUrl(id) { return `${this.base}/documents/${encodeURIComponent(id)}/file`; }
   getSettings() { return this.req('/settings'); }
   saveSettings(s) { return this.req('/settings', { method: 'PUT', body: s }); }
   importAppleHealth(file) {

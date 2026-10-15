@@ -172,7 +172,7 @@ def test_streamed_body_without_length_is_counted(c):
 
 def test_import_size_limit(c, monkeypatch):
     monkeypatch.setattr(main, "MAX_IMPORT_MB", 1)
-    big = b"x" * (1024 * 1024 + 1)
+    big = b"x" * (1024 * 1024 + 100 * 1024)  # over 1 MB plus the room for the form around the file
     r = c.post("/api/import/apple-health", files={"file": ("export.zip", big, "application/zip")})
     assert r.status_code == 413 and "1 MB" in r.json()["detail"]
     assert list(db.TMP_DIR.iterdir()) == []

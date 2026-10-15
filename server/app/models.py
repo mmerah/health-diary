@@ -96,7 +96,9 @@ class Profile(Body):
 
 class Settings(Body):
     redactWords: Annotated[list[Str(100)], Field(max_length=300)] | None = None
-    excludedDocs: Annotated[list[int], Field(max_length=2000)] | None = None
+    # Paperless ids are numbers; diary documents are "d12".
+    excludedDocs: Annotated[list[int | Annotated[str, StringConstraints(pattern=r"^d\d{1,18}$")]],
+                            Field(max_length=2000)] | None = None
     lastSync: Any = None  # set by the server only; ignored
 
 
@@ -244,3 +246,25 @@ class Ingest(Body):
     weight_unit: Str(20) | None = None
     weight_date: Str(50) | None = None
     workouts: LINES = None
+
+
+# ---------- Documents
+
+DocCategory = Literal["Blood test", "Cardiology", "Imaging", "Consultation letter", "Prescription",
+                      "Hospital stay", "Vaccination", "Other"]
+TITLE = Annotated[str, StringConstraints(min_length=1, max_length=200, strip_whitespace=True)]
+
+
+class DocumentUpload(Body):
+    """The optional form fields sent with a file."""
+    date: DATE | None = None
+    title: TITLE | None = None
+    category: DocCategory | None = None
+
+
+class DocumentPatch(Body):
+    """Only the fields sent change. For a Paperless document, null gives back the Paperless value.
+    For a diary document, null category means "not set"."""
+    date: DATE | None = None
+    title: TITLE | None = None
+    category: DocCategory | None = None

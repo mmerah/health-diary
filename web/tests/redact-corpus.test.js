@@ -14,6 +14,7 @@ const r = makeRedactor({
 const run = s => r.text(s, { ref: '2026-10-14' });
 
 const MUST_KEEP = [
+  'INR 2.4 (2.0 - 3.0)', 'MMSE 26/30', 'Dottore di ricerca', 'Ing. dell’opera',
   '2019 Appendektomie',
   '2019 Appendectomy\n2022 Pneumonia',
   '2019 Appendektomie\n2021 Knie-OP',
@@ -87,6 +88,13 @@ const MUST_KEEP = [
 ];
 
 const MUST_HIDE = [
+  // Italian titles and a lab word after a name (review round 7).
+  ['Dott. Rossi', 'Dott. [name]'],
+  ['Dott.ssa Bianchi', 'Dott.ssa [name]'],
+  ['Sig.ra Neri', 'Sig.ra [name]'],
+  ['Ospedale San Raffaele Dott.ssa Giulia Bianchi', '[hospital] Dott.ssa [name]'],
+  ['Dr. Müller INR 2.4', 'Dr. [name] INR 2.4'],
+  ['Prof. Dr. med. Hans Meier TSH 2,1 mU/L', 'Prof. Dr. [name] TSH 2,1 mU/L'],
   // A doctor after a hospital name on the same line (review round 6).
   ['Spital Zollikerberg Dr. med. Hans Meier', '[hospital] Dr. [name]'],
   ['Hôpital Cochin Pr Jean Dupont', '[hospital] Pr [name]'],

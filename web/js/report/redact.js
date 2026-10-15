@@ -97,15 +97,19 @@ export const safeCategory = c => (isBuiltInDocType(String(c || '').trim()) ? Str
 const NOT_WORD_BEFORE = String.raw`(?<![\p{L}\p{N}])`;
 const NOT_WORD_AFTER = String.raw`(?![\p{L}\p{N}])`;
 
+// Lab and test words are never part of a person's name: "Dr. Müller INR 2.4" keeps INR.
+const LAB_WORD = String.raw`(?:INR|MMSE|HbA1c|HbA|Hb|TSH|fT3|fT4|CRP|PCT|LDL|HDL|BMI|PSA|ALT|AST|GGT|ALP|LDH|CK|eGFR|GFR|BNP|NT-proBNP|ECG|EKG|EEG|EMG|MRI|IRM|MRT|CT|PET|SpO2|HRV|VES|PVC|FEV1|FVC|INR-Wert|Quick)`;
 // A name token: a capitalised or all-caps word (with inner hyphens), an initial "L.", or an already hidden name.
-const TOK = String.raw`(?:\[name\]|\p{Lu}[\p{L}'’]*(?:-\p{Lu}[\p{L}'’]*)*\.?)`;
+const TOK = String.raw`(?:\[name\]|(?!${LAB_WORD}(?![\p{L}\p{N}]))\p{Lu}[\p{L}'’]*(?:-\p{Lu}[\p{L}'’]*)*\.?)`;
 const PART = String.raw`(?:de|du|des|la|le|van|von|der|den|di|da|del|della|dos|das|el|al|ben|bin|De|Du|Van|Von|Le|La|Del|Da|Di)`;
 const GLUED = String.raw`(?:[dDlL]['’])`;
 const NAME = String.raw`(?:${PART}[ \t]+){0,2}${GLUED}?${TOK}(?:(?:[ \t]+(?:${PART}[ \t]+){0,2}|[ \t]*${GLUED}|[ \t]+${GLUED})${TOK}){0,3}`;
 
-const TITLES = ['Professeur', 'Professor', 'Docteur', 'Doctor', 'Monsieur', 'Madame', 'Mademoiselle', 'Mlle', 'Mme', 'Mrs', 'Mr', 'Ms', 'Miss', 'Prof', 'Dr', 'Pr', 'Drs'];
+// Italian titles have inner dots ("Dott.ssa", "Sig.ra"): they are escaped below.
+const TITLES = ['Professeur', 'Professor', 'Docteur', 'Doctor', 'Monsieur', 'Madame', 'Mademoiselle', 'Mlle', 'Mme', 'Mrs', 'Mr', 'Ms', 'Miss', 'Prof', 'Dr', 'Pr', 'Drs',
+  'Dott.ssa', 'Dr.ssa', 'Prof.ssa', 'Sig.ra', 'Sig.na', 'Dottor', 'Dottore', 'Dottoressa', 'Signor', 'Signora', 'Signorina', 'Dott', 'Sig', 'Ing'];
 const TITLE_WORDS = [...TITLES, ...['DOCTEUR', 'DOCTOR', 'PROFESSEUR', 'PROFESSOR', 'MONSIEUR', 'MADAME', 'MME', 'MLLE', 'MRS', 'MR', 'DR', 'Herr', 'Frau']]
-  .sort((a, b) => b.length - a.length).join('|');
+  .sort((a, b) => b.length - a.length).map(t => t.replace(/\./g, '\\.')).join('|');
 // German and Swiss degrees after a title: "Dr. med.", "Dr. med. dent.", "Prof. Dr. med.", "Dr. rer. nat.".
 const DEGREE = String.raw`(?:med|dent|vet|phil|rer|nat|pharm|habil|univ|h\.c|sc|jur|oec|biol|chem|psych)\.?`;
 const TITLE_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}(${TITLE_WORDS}|M)(\.?)((?:[ \t]+(?:${TITLE_WORDS})\.?|[ \t]+${DEGREE})*)[ \t]+(${NAME})`, 'gu');

@@ -2,8 +2,8 @@
 
 The Paperless address is set for the whole install ($PAPERLESS_URL). Each user saves their
 own Paperless API token and tag in Profile, so users only see their own documents.
-Tokens are stored encrypted (see crypto.py). $PAPERLESS_TOKEN is a fallback for the
-first administrator account only (the administrator with the lowest id).
+Tokens are stored encrypted (see crypto.py). $PAPERLESS_TOKEN is a fallback for one
+account only: the one named in $PAPERLESS_TOKEN_USER. Without that name, nobody uses it.
 """
 import logging
 import os
@@ -17,6 +17,7 @@ from . import crypto, db
 log = logging.getLogger("uvicorn.error")
 URL = os.environ.get("PAPERLESS_URL", "").rstrip("/")
 ENV_TOKEN = os.environ.get("PAPERLESS_TOKEN", "")
+ENV_TOKEN_USER = os.environ.get("PAPERLESS_TOKEN_USER", "").strip().lower()
 DEFAULT_TAG = os.environ.get("PAPERLESS_TAG", "medical")
 # Address for "Open in Paperless" links on your devices. Defaults to PAPERLESS_URL.
 PUBLIC_URL = os.environ.get("PAPERLESS_PUBLIC_URL", URL).rstrip("/")
@@ -42,6 +43,12 @@ def encrypt_old_tokens():
             db.set_kv(uid, "paperless", cfg)
 
 
+def check_env():
+    if ENV_TOKEN and not ENV_TOKEN_USER:
+        log.warning("PAPERLESS_TOKEN is set, but PAPERLESS_TOKEN_USER is not. Nobody uses this token. "
+                    "Set PAPERLESS_TOKEN_USER to the username that may use it.")
+
+
 def forget(uid):
     """Drops the cached documents of a user (new settings, or the user is gone)."""
     _cache.pop(uid, None)
@@ -53,7 +60,9 @@ def user_config(uid):
     own = crypto.decrypt(cfg.get("tokenEnc"))
     if own:
         return own, cfg.get("tag") or DEFAULT_TAG, False
-    env = ENV_TOKEN if ENV_TOKEN and uid == db.first_admin_id() else ""
+    # Tied to a username, not to a role or an id: the token never moves to another person.
+    user = db.get_user(uid) if ENV_TOKEN and ENV_TOKEN_USER else None
+    env = ENV_TOKEN if user and user["username"].lower() == ENV_TOKEN_USER else ""
     return env, cfg.get("tag") or DEFAULT_TAG, bool(env)
 
 

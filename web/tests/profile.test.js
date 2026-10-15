@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { dateTimeLabel, formatSetupCode, medStatus, newPasswordError, parseHeight, parseMedForm, passwordHint, sortMeds } from '../js/screens/profile-account.js';
 import { filterDocs, categoriesOf } from '../js/screens/records-data.js';
+import { mergeProfile } from '../js/screens/profile-merge.js';
 
 const TODAY = '2026-10-14';
 
@@ -76,4 +77,34 @@ test('records: filterDocs searches title, sender and text; newest first', () => 
   assert.deepEqual(filterDocs(docs, { query: 'petit mitral' }).map(d => d.id), [2]);
   assert.deepEqual(filterDocs(docs, { category: 'Cardiology' }).map(d => d.id), [2]);
   assert.deepEqual(categoriesOf(docs), ['Blood test', 'Cardiology']);
+});
+
+test('mergeProfile: server copy plus only the fields changed here', () => {
+  const med = (id, name, extra = {}) => ({ id, name, dose: '', since: '', until: '', asNeeded: false, ...extra });
+  const base = { name: 'Alex', allergies: 'None', heightCm: 178, medications: [med('a', 'Mag'), med('b', 'Vit D'), med('c', 'Iron')] };
+  const mine = { name: 'Alex', allergies: 'Penicillin', heightCm: 178,
+    medications: [med('a', 'Mag', { until: '2026-10-14' }), med('b', 'Vit D'), med('n', 'New here')] }; // stopped a, deleted c, added n
+  const theirs = { name: 'Alex E.', allergies: 'None', heightCm: 179,
+    medications: [med('a', 'Mag'), med('b', 'Vit D', { dose: '2000 IU' }), med('c', 'Iron'), med('t', 'New there')] };
+  const out = mergeProfile(base, mine, theirs);
+  assert.equal(out.name, 'Alex E.');          // changed there only
+  assert.equal(out.heightCm, 179);
+  assert.equal(out.allergies, 'Penicillin');  // changed here
+  const byId = Object.fromEntries(out.medications.map(m => [m.id, m]));
+  assert.equal(byId.a.until, '2026-10-14');   // my change
+  assert.equal(byId.b.dose, '2000 IU');       // their change
+  assert.equal(byId.c, undefined);            // my delete
+  assert.ok(byId.t && byId.n);                // both additions
+});
+
+test('mergeProfile: a delete there wins over no change here; a change here survives a delete there', () => {
+  const med = (id, dose = '') => ({ id, name: id, dose, since: '', until: '', asNeeded: false });
+  const base = { medications: [med('x'), med('y')] };
+  const mine = { medications: [med('x'), med('y', '5 mg')] };
+  const theirs = { medications: [] };
+  assert.deepEqual(mergeProfile(base, mine, theirs).medications.map(m => m.id), ['y']);
+});
+
+test('mergeProfile without a base keeps the local copy', () => {
+  assert.equal(mergeProfile(null, { name: 'A', medications: [] }, { name: 'B', medications: [] }).name, 'A');
 });

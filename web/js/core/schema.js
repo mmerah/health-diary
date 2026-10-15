@@ -48,6 +48,13 @@ export const SYMPTOMS = ['Fatigue', 'Headache', 'Palpitations', 'Dizziness', 'Sh
 
 const one = v => Number(v).toFixed(1);
 
+/** Body mass index, or null when weight or height is missing or not plausible. */
+export function bmi(kg, heightCm) {
+  const w = Number(kg), h = Number(heightCm);
+  if (!(w >= 20 && w <= 300) || !(h >= 50 && h <= 250)) return null;
+  return Math.round((w / ((h / 100) ** 2)) * 10) / 10;
+}
+
 /** Measurement types. `fields` drive the forms, `parse` validates them, `format` and `flag` drive display and report. */
 export const MEASUREMENTS = {
   weight: {
@@ -189,6 +196,12 @@ export function hasContent(log) {
     || DRINKS.some(d => l.drinks[d.key] != null)
     || MEALS.some(m => l.meals[m.key].text));
 }
+
+/** "7 water · 2 coffee · 0 alcohol" for the drinks that were recorded; '' when none was. */
+export const drinkSummary = drinks => DRINKS
+  .filter(d => drinks && drinks[d.key] != null)
+  .map(d => `${drinks[d.key]} ${d.label.toLowerCase()}`)
+  .join(' · ');
 
 /** When a symptom happened, in words: "all day", "morning and evening", "15:10–15:20". */
 export function describeWhen(s) {

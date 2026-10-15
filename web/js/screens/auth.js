@@ -5,37 +5,10 @@
 // so mounted() adds the listeners for the show-password buttons and the password hint.
 import { esc } from '../core/format.js';
 import { ICON } from '../core/ui.js';
-import { formatSetupCode, MIN_PASSWORD, newPasswordError, passwordHint } from './profile-account.js';
+import { busy, clearErrors, errorBox, pwField, showError as showErrorIn, togglePassword, updatePwHint } from './form-fields.js';
+import { formatSetupCode, newPasswordError } from './profile-account.js';
 
-function pwField(id, label, autocomplete, { hint = false } = {}) {
-  return `<div class="field"><label class="label" for="${id}">${esc(label)}</label>
-    <div class="pw-wrap"><input id="${id}" name="${id}" type="password" autocomplete="${autocomplete}" required
-      ${autocomplete === 'new-password' ? `minlength="${MIN_PASSWORD}"` : ''}${hint ? ` aria-describedby="${id}-hint"` : ''}>
-      <button type="button" class="pw-toggle" data-show="${id}" aria-controls="${id}" aria-pressed="false" aria-label="Show password">Show</button></div>
-    ${hint ? `<p class="hint pw-hint" id="${id}-hint" data-level="empty">${esc(passwordHint('').text)}</p>` : ''}</div>`;
-}
-
-const errorBox = message => `<div class="auth-error" id="auth-error" role="alert">${message ? `${ICON.alert}<span>${esc(message)}</span>` : ''}</div>`;
-
-function showError(message, field) {
-  const box = document.getElementById('auth-error');
-  if (box) box.innerHTML = `${ICON.alert}<span>${esc(message)}</span>`;
-  if (field) { field.setAttribute('aria-invalid', 'true'); field.focus(); }
-}
-
-function clearError(form) {
-  const box = document.getElementById('auth-error');
-  if (box) box.innerHTML = '';
-  form.querySelectorAll('[aria-invalid]').forEach(x => x.removeAttribute('aria-invalid'));
-}
-
-async function busy(form, label, fn) {
-  const btn = form.querySelector('[type="submit"]');
-  const text = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = label;
-  try { return await fn(); } finally { if (btn.isConnected) { btn.disabled = false; btn.textContent = text; } }
-}
+const showError = (message, field) => showErrorIn('auth-error', message, field);
 
 export default {
   render(ctx, { mode = 'login', message = '' } = {}) {
@@ -65,7 +38,7 @@ export default {
         ${info}
         <form class="auth-form" data-form="${setup ? 'setup' : 'login'}" novalidate>
           ${fields}
-          ${errorBox('')}
+          ${errorBox('auth-error', 'auth-error')}
           <button class="btn primary" type="submit">${setup ? 'Create account' : 'Log in'}</button>
         </form>
       </section>
@@ -75,45 +48,31 @@ export default {
 
   mounted(ctx) {
     const root = ctx.view;
-    root.querySelectorAll('[data-show]').forEach(btn => btn.addEventListener('click', () => {
-      const input = document.getElementById(btn.dataset.show);
-      const show = input.type === 'password';
-      input.type = show ? 'text' : 'password';
-      btn.textContent = show ? 'Hide' : 'Show';
-      btn.setAttribute('aria-pressed', String(show));
-      btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
-    }));
+    root.querySelectorAll('[data-act="pw-show"]').forEach(btn => btn.addEventListener('click', () => togglePassword(btn)));
     const pw = root.querySelector('#au-pw[autocomplete="new-password"]');
-    if (pw) {
-      pw.addEventListener('input', () => {
-        const h = passwordHint(pw.value, (root.querySelector('#au-user') || {}).value);
-        const el = document.getElementById('au-pw-hint');
-        el.textContent = h.text;
-        el.dataset.level = h.level;
-      });
-    }
+    if (pw) pw.addEventListener('input', () => updatePwHint(pw, (root.querySelector('#au-user') || {}).value));
     const first = root.querySelector('.auth-form input');
     if (first) first.focus();
   },
 
   forms: {
     async login(form, e, ctx) {
-      clearError(form);
+      clearErrors(form);
       const username = form.username.value.trim(), password = form['au-pw'].value;
       if (!username) return showError('Enter your username.', form.username);
       if (!password) return showError('Enter your password.', form['au-pw']);
-      await busy(form, 'Logging in…', async () => {
+      await busy(form, async () => {
         let user;
         try { user = await ctx.api.login(username, password); } catch (err) {
           form['au-pw'].value = '';
           return showError(err.message || 'Could not log in.', form['au-pw']);
         }
         ctx.onLogin(user);
-      });
+      }, 'Logging in…');
     },
 
     async setup(form, e, ctx) {
-      clearError(form);
+      clearErrors(form);
       const code = formatSetupCode(form.code.value);
       const username = form.username.value.trim();
       const pw = form['au-pw'].value, again = form['au-pw2'].value;
@@ -122,13 +81,13 @@ export default {
       const err = newPasswordError(pw, again, username);
       if (err) return showError(err, err.startsWith('The two') ? form['au-pw2'] : form['au-pw']);
       form.code.value = code;
-      await busy(form, 'Creating account…', async () => {
+      await busy(form, async () => {
         let user;
         try { user = await ctx.api.setup(code, username, pw); } catch (x) {
           return showError(x.message || 'Could not create the account.', /setup code/i.test(x.message || '') ? form.code : null);
         }
         ctx.onLogin(user);
-      });
+      }, 'Creating account…');
     },
   },
 };

@@ -5,10 +5,12 @@
 //   { profile, days: [{ date, log, health }], measurements, documents (null = not available), documentsError, today },
 //   { from, to, audience: 'doctor' | 'ai', question, include: { profile: true, … }, fullDaily, docScope, docFull, excludedDocs });
 import { addDays, ageOn, diffDays } from '../core/dates.js';
-import { hasContent, MEALS, normalizeLog, normalizeProfile } from '../core/schema.js';
-import { labTable } from './labs.js';
+import { lines as textLines } from '../core/format.js';
+import { bmi, hasContent, MEALS, normalizeLog, normalizeProfile } from '../core/schema.js';
+import { labTable, nonLabText, parseLabs } from './labs.js';
 import {
-  adherence, asNeededUse, associations, drinkStats, measurementStats, medTimeline, symptomStats, wearableStats,
+  adherence, asNeededUse, associations, drinkStats, measurementStats, medsTouched as medsTouchedLog, medTimeline, monthlyStats, symptomStats,
+  wearableStats,
 } from './stats.js';
 
 /** Report sections the user can switch on and off (flags and the summary are always included). */
@@ -39,19 +41,31 @@ export const DEFAULT_OPTIONS = {
 
 // ---------- Documents
 
-/** Documents for the report: excluded ones out; by default those in the period plus the latest per category before it. */
+// Follow-up instructions make an old document still relevant: "Follow-up echo in 2 years", "contrôle dans 1 an".
+const FOLLOW_UP_RE = /\b(?:follow[- ]?up|re-?check|repeat|control|contr[ôo]le|[àa] revoir|revoir|surveillance|dans\s+\d+\s+(?:ans?|mois|semaines?)|in\s+\d+\s+(?:years?|months?|weeks?))\b/i;
+
+/**
+ * Documents for the report, newest first. Excluded ones are out. Scope 'period' (the default):
+ * the documents of the period, every document of the 2 years before it, the latest of each category before that,
+ * and older documents that ask for a follow-up. Scope 'all': every document.
+ */
 export function selectDocuments(docs, { from, to, scope = 'period', excluded = [] } = {}) {
   const ex = new Set((excluded || []).map(String));
   const ok = (docs || []).filter(d => !ex.has(String(d.id)) && d.date && d.date <= to);
   if (scope === 'all') return ok.sort((a, b) => b.date.localeCompare(a.date));
-  const inPeriod = ok.filter(d => d.date >= from);
+  const recent = addDays(from, -730);
+  const keep = new Set(ok.filter(d => d.date >= recent || FOLLOW_UP_RE.test(String(d.content || ''))));
   const latest = new Map();
   for (const d of ok.filter(x => x.date < from)) {
     const k = (d.category || 'Other').trim().toLowerCase();
     if (!latest.has(k) || latest.get(k).date < d.date) latest.set(k, d);
   }
-  return [...inPeriod, ...latest.values()].sort((a, b) => b.date.localeCompare(a.date));
+  for (const d of latest.values()) keep.add(d);
+  return [...keep].sort((a, b) => b.date.localeCompare(a.date));
 }
+
+// Letterhead and identity lines of a lab report: not worth repeating next to the lab table.
+const HEADER_LINE_RE = /^\s*(?:patient|nom|name|pr[ée]nom|dob|n[ée]e?\b|born|sample|[ée]chantillon|validated|valid[ée]|sign|dr\.?\s|docteur|t[ée]l|phone|page|adresse|address|ipp|dossier|laboratoire|laboratory|clinique|h[ôo]pital|cabinet|centre)/i;
 
 const CONCLUSION_RE = /^\s*(?:conclusions?|summary|impression|assessment|interpretation|synth[èe]se|r[ée]sum[ée]|interpr[ée]tation|diagnos(?:is|tic)|avis|recommendations?|plan)\b\s*[:.\-–]?\s*/i;
 
@@ -82,9 +96,6 @@ export function excerpt(content, max = 600) {
 
 // ---------- The model
 
-function bmi(kg, cm) { return kg && cm ? Math.round((kg / ((cm / 100) ** 2)) * 10) / 10 : null; }
-
-const textLines = s => String(s || '').split('\n').map(l => l.trim()).filter(Boolean);
 
 export function buildReportModel(data, options) {
   const o = { ...DEFAULT_OPTIONS, ...options, include: { ...DEFAULT_OPTIONS.include, ...(options.include || {}) } };
@@ -155,11 +166,13 @@ export function buildReportModel(data, options) {
     model.labs = labs;
     model.documents.list = selected.map(d => {
       const conclusion = docConclusion(d.content);
-      const hasLabs = labs.dates.includes(d.date) && labTable([d]).rows.length > 0;
+      const hasLabs = parseLabs(d.content).length > 0;
+      // The lines that are not lab values are always kept: "Antigène HBs : POSITIF", comments, conclusions.
+      const rest = hasLabs ? nonLabText(d.content).split('\n').filter(l => !HEADER_LINE_RE.test(l)).join('\n') : d.content;
       return {
         id: d.id, date: d.date, title: d.title || 'Document', category: d.category || '', correspondent: d.correspondent || '',
         inPeriod: d.date >= from, conclusion, hasLabs,
-        excerpt: !conclusion && !hasLabs ? excerpt(d.content) : null,
+        excerpt: !conclusion && String(rest || '').trim() ? excerpt(rest, hasLabs ? 400 : 600) : null,
         content: o.docFull ? String(d.content || '').trim() : null,
       };
     });
@@ -168,41 +181,47 @@ export function buildReportModel(data, options) {
     model.labs = { dates: [], rows: [] };
   }
 
-  // Daily log: a compact row for each day with data, details for symptom days and the days around them.
-  const rows = days.filter(d => d.logged || d.health);
+  // Daily log. The table: every day with data (AI, up to 90 days); symptom days and the days around them (doctor);
+  // symptom days only (beyond 90 days, with monthly summaries); every day with "Full daily details".
+  // The details: symptom days and the days around them (AI); every day with "Full daily details" or up to 14 days.
+  const withData = days.filter(d => d.logged || d.health);
   const symptomDates = new Set(loggedDays.filter(d => d.log.symptoms.length).map(d => d.date));
+  const around = new Set();
+  for (const x of symptomDates) for (const k of [-1, 0, 1]) around.add(addDays(x, k));
+  const long = span > 90;
+  const tableMode = o.fullDaily || span <= 14 ? 'all' : long ? 'symptom-days' : o.audience === 'doctor' ? 'around' : 'all';
+  const tableRows = withData.filter(d => tableMode === 'all' || (tableMode === 'around' ? around.has(d.date) : symptomDates.has(d.date)) || d.date === partial);
   const detailAll = o.fullDaily || span <= 14;
-  const detailDates = new Set();
-  for (const d of rows) {
-    if (detailAll || symptomDates.has(d.date)) {
-      detailDates.add(d.date);
-      if (!detailAll) { detailDates.add(addDays(d.date, -1)); detailDates.add(addDays(d.date, 1)); }
-    }
-  }
+  const detailDates = new Set(withData.filter(d => detailAll || (o.audience === 'ai' && !long && around.has(d.date)) || (o.audience === 'ai' && long && symptomDates.has(d.date))).map(d => d.date));
   const showMeasured = !inc.measurements;
   model.daily = {
+    tableMode,
     detailMode: detailAll ? 'all' : 'symptom-days',
-    rows: rows.map(d => {
+    hiddenDays: withData.length - tableRows.length,
+    rows: tableRows.map(d => {
       const l = d.log;
-      const s = d.health && d.health.sleep;
+      const sl = d.health && d.health.sleep;
       return {
         date: d.date, partial: d.date === partial, logged: d.logged,
-        sleep: s && s.total && !s.inBedOnly ? s.total : null,
+        sleep: sl && sl.total && !sl.inBedOnly ? sl.total : null,
         steps: d.health && d.health.steps && d.date !== partial ? d.health.steps : null,
         meals: l ? MEALS.filter(m => l.meals[m.key].text).length + l.snacks.filter(x => x.text).length : null,
         drinks: l ? l.drinks : null,
-        symptoms: l ? l.symptoms.map(x => ({ name: x.name, severity: x.severity })) : [],
-        notes: !!(l && l.notes),
+        symptoms: l ? l.symptoms.map(x => ({ name: x.name, severity: x.severity, when: x.when, periods: x.periods, from: x.from, to: x.to })) : [],
+        notes: l ? l.notes : '',
+        symptomDay: symptomDates.has(d.date),
       };
     }),
-    details: rows.filter(d => detailDates.has(d.date)).map(d => ({
+    details: withData.filter(d => detailDates.has(d.date)).map(d => ({
       date: d.date, partial: d.date === partial, log: d.logged ? d.log : null, health: d.health,
-      meds: d.logged ? (profile.medications || []).filter(m => !m.asNeeded && (!m.since || m.since <= d.date) && (!m.until || m.until >= d.date))
+      meds: d.logged && medsTouchedLog(d.log) ? (profile.medications || []).filter(m => !m.asNeeded && (!m.since || m.since <= d.date) && (!m.until || m.until >= d.date))
         .map(m => ({ name: m.name, dose: m.dose, done: !!(d.log.meds.taken[m.id] || {}).done, time: (d.log.meds.taken[m.id] || {}).time || '' })) : [],
       measured: showMeasured ? measurements.filter(m => m.date === d.date) : [],
       symptomDay: symptomDates.has(d.date),
     })),
   };
+  model.monthly = long ? monthlyStats(days, { skip: partial }) : null;
+  model.lowData = loggedDays.length < 14;
 
   model.flags = computeFlags(model);
   return model;
@@ -220,7 +239,7 @@ export function computeFlags(m) {
   if (inc.symptoms !== false) {
     for (const s of m.symptoms) {
       if (s.trend === 'new' || s.trend === 'more' || s.trend === 'worse') f.push({ kind: `symptom-${s.trend}`, level: 'caution', symptom: s });
-      if (s.severeDates.length) f.push({ kind: 'symptom-severe', level: 'info', symptom: s });
+      if (s.severeDates.length >= 2) f.push({ kind: 'symptom-severe', level: 'info', symptom: s });
     }
   }
   if (inc.meds !== false) {
@@ -236,6 +255,14 @@ export function computeFlags(m) {
         if (earlier.length) f.push({ kind: 'lab-resolved', level: 'info', row, date: latestDate(row), earlier: earlier[earlier.length - 1] });
       }
     }
+  }
+  // The two strongest patterns with enough days (different symptoms): key points, never causes.
+  if (inc.associations !== false) {
+    const seen = new Set();
+    const strong = (m.associations || []).filter(a => !a.small && Math.abs(a.diff) >= 0.15 && a.a.with + a.b.with >= 5)
+      .sort((x, y) => Math.abs(y.diff) - Math.abs(x.diff))
+      .filter(a => !seen.has(a.symptom) && seen.add(a.symptom)).slice(0, 2);
+    for (const a of strong) f.push({ kind: 'association', level: 'info', assoc: a });
   }
   const c = inc.wearable !== false && m.wearable && m.wearable.compare;
   if (c && c.first.restingHr && c.last.restingHr && c.last.restingHr.median - c.first.restingHr.median >= 5) {

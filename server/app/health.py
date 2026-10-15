@@ -27,6 +27,7 @@ from . import db
 log = logging.getLogger("uvicorn.error")
 TZ = ZoneInfo(os.environ.get("TZ") or "UTC")
 MAX_UNPACKED = int(os.environ.get("MAX_IMPORT_UNPACKED_MB", "4096")) * 1024 * 1024
+MAX_DEPTH = 32
 MAX_RATIO = 200  # Apple's export.xml packs about 10 to 20 times; far more means a zip bomb
 
 # Values outside these ranges are typing or unit mistakes. They are ignored.
@@ -70,9 +71,10 @@ _NUM = re.compile(r"-?\d[\d\s  '’.,]*")
 _GROUP_SEP = "[\\s  '’]"
 
 
-def _num(x, integer=False):
+def _num(x, integer=False, comma_decimal=False):
     """Reads numbers as Shortcuts may send them: 2140, "2 140", "2'140", "12,345" (thousands),
-    "46,7" (decimal comma), "76.9 kg". integer=True also reads "12.345" as thousands."""
+    "46,7" (decimal comma), "76.9 kg". integer=True also reads "12.345" as thousands.
+    comma_decimal=True reads "45,123" as 45.123 (see read)."""
     if x is None or isinstance(x, bool):
         return None
     if isinstance(x, (int, float)):
@@ -88,7 +90,7 @@ def _num(x, integer=False):
     t = re.split(_GROUP_SEP, t)[0]  # "76 2" is two numbers: take the first
     if "," in t and "." in t:  # the last mark is the decimal mark
         t = t.replace(".", "").replace(",", ".") if t.rfind(",") > t.rfind(".") else t.replace(",", "")
-    elif re.fullmatch(r"[1-9]\d{0,2}(,\d{3})+", t):
+    elif not comma_decimal and re.fullmatch(r"[1-9]\d{0,2}(,\d{3})+", t):
         t = t.replace(",", "")
     elif integer and re.fullmatch(r"[1-9]\d{0,2}(\.\d{3})+", t):
         t = t.replace(".", "")
@@ -98,6 +100,13 @@ def _num(x, integer=False):
         return sign * float(t)
     except ValueError:
         return None
+
+
+def read(x, field, integer=False):
+    """A number for `field`, or None. "45,123" is 45123 for steps, but 45.123 for HRV:
+    when the thousands reading cannot be true for the field, use the decimal comma."""
+    v = plausible(field, _num(x, integer))
+    return v if v is not None else plausible(field, _num(x, integer, comma_decimal=True))
 
 
 _UNITS = {"kg": 1, "kgs": 1, "kilo": 1, "kilos": 1, "kilogram": 1, "kilograms": 1,
@@ -113,15 +122,16 @@ def parse_weight(raw, unit=None):
     if m:
         kg = float(m[1].replace(",", ".")) * STONE + float((m[2] or "0").replace(",", ".")) * LB
     else:
-        v = _num(raw)
-        if v is None:
-            return None
         found = re.search(r"\d\s*([a-z]+)", text)
         name = found[1] if found else (str(unit or "kg").strip().lower())
         if name not in _UNITS:
             log.info("Weight with an unknown unit ignored: %r", name[:20])
             return None
-        kg = v * _UNITS[name]
+        for comma_decimal in (False, True):  # "76,500" is 76.5 kg, not 76500
+            v = _num(raw, comma_decimal=comma_decimal)
+            if v is not None and plausible("weight", round(v * _UNITS[name], 1)) is not None:
+                return round(v * _UNITS[name], 1)
+        return None
     return plausible("weight", round(kg, 1))
 
 
@@ -131,6 +141,7 @@ ASLEEP = ("core", "deep", "rem", "asleep")
 STAGES = ("core", "deep", "rem")
 STAGED_SHARE = 0.7  # see summarize_sleep
 SESSION_GAP = 90  # minutes. A longer gap starts a new sleep session (a nap, or a second sleep).
+OVERNIGHT = (20, 10)  # local hours: from 20:00 to 10:00, gaps never split the night. Naps are outside.
 
 
 class Sample(NamedTuple):
@@ -190,13 +201,25 @@ def _clip(iv, lo, hi):
     return [(max(s, lo), min(e, hi), sd, ed) for s, e, sd, ed in iv if e > lo and s < hi]
 
 
-def _sessions(iv):
+def _overnight(dt):
+    return dt.hour >= OVERNIGHT[0] or dt.hour < OVERNIGHT[1]
+
+
+def _sessions(iv, bridges):
+    """Splits asleep intervals into sessions. A gap does NOT split when it is short, when awake or
+    in-bed samples (`bridges`) cover it, or when it lies in the night: a long awake time at 3 am
+    is still the same night, not a nap."""
     out = []
     for x in iv:
-        if out and (x[0] - out[-1][-1][1]) / 60 <= SESSION_GAP:
-            out[-1].append(x)
-        else:
-            out.append([x])
+        if out:
+            a, b = out[-1][-1][1], x[0]
+            gap = (b - a) / 60
+            uncovered = gap - _length(_clip(bridges, a, b))
+            at_night = gap < 10 * 60 and _overnight(out[-1][-1][3]) and _overnight(x[2])
+            if gap <= SESSION_GAP or uncovered <= SESSION_GAP or at_night:
+                out[-1].append(x)
+                continue
+        out.append([x])
     return out
 
 
@@ -226,7 +249,7 @@ def summarize_sleep(samples):
         base = _intervals(items, ("inbed",))
     if not base:
         return None
-    sessions = _sessions(base)
+    sessions = _sessions(base, _intervals(samples, ("awake", "inbed")))
     main = max(sessions, key=_length)
     lo, hi = main[0][0], main[-1][1]
     has_stages = bool(_clip(_intervals(items, STAGES), lo, hi))
@@ -243,7 +266,7 @@ def summarize_sleep(samples):
         "bed": hhmm(main[0][2]),
         "wake": hhmm(main[-1][3]),
         "naps": [{"start": hhmm(s[0][2]), "end": hhmm(s[-1][3]), "minutes": round(_length(s))}
-                 for s in sessions if s is not main],
+                 for s in sessions if s is not main and not _overnight(s[0][2])],
         "inBedOnly": in_bed_only,
     }
 
@@ -308,7 +331,7 @@ def _per_day(lines, field, integer=False):
     """'value|start|end' lines -> {date: average}, by the local date of each sample."""
     values = defaultdict(list)
     for v, s, _, _ in parse_lines(lines):
-        n = plausible(field, _num(v, integer))
+        n = read(v, field, integer)
         if n is not None:
             values[s.date()].append(n)
     return {d: round(sum(x) / len(x)) for d, x in values.items()}
@@ -323,9 +346,9 @@ def ingest_shortcut(uid, p):
 
     samples = [Sample(sleep_stage(v), s, e, src) for v, s, e, src in parse_lines(p.get("sleep"))]
     fresh["sleep"] = summarize_sleep([s for s in samples if night_of(s.end) == day])
-    fresh["steps"] = plausible("steps", _num(p.get("steps"), integer=True))
-    fresh["restingHr"] = plausible("restingHr", _num(p.get("resting_hr")))
-    fresh["hrv"] = plausible("hrv", _num(p.get("hrv")))
+    fresh["steps"] = read(p.get("steps"), "steps", integer=True)
+    fresh["restingHr"] = read(p.get("resting_hr"), "restingHr")
+    fresh["hrv"] = read(p.get("hrv"), "hrv")
     for k in ("steps", "restingHr", "hrv"):
         fresh[k] = round(fresh[k]) if fresh[k] is not None else None
     if p.get("workouts") is not None:
@@ -338,7 +361,7 @@ def ingest_shortcut(uid, p):
         for d, v in _per_day(p.get(key), field, integer).items():
             daily[d][field] = v
     # Yesterday's final step count, sent the next morning.
-    ys = plausible("steps", _num(p.get("steps_yesterday"), integer=True))
+    ys = read(p.get("steps_yesterday"), "steps", integer=True)
     if ys is not None:
         daily[day - timedelta(days=1)]["steps"] = round(ys)
 
@@ -409,13 +432,7 @@ def _read_export(fh):
     weights, temps, nights, workouts = [], [], defaultdict(list), defaultdict(list)
     bp = defaultdict(dict)  # time -> {sys, dia}
 
-    depth, root = 0, None
-    for event, el in iterparse(fh, events=("start", "end"), forbid_dtd=False):
-        if event == "start":
-            depth += 1
-            root = root if root is not None else el
-            continue
-        depth -= 1
+    def handle(el):
         if el.tag == "Record" and el.get("type") in TYPES:
             kind = TYPES[el.get("type")]
             start, end = parse_dt(el.get("startDate")), parse_dt(el.get("endDate"))
@@ -423,31 +440,47 @@ def _read_export(fh):
                 s = Sample(sleep_stage(el.get("value")), start, end, el.get("sourceName", ""))
                 if s.stage:
                     nights[night_of(end)].append(s)
-            else:
-                v = _num(el.get("value"))
-                d = start.date()
-                if v is None:
-                    pass
-                elif kind == "steps":
-                    steps[d][start.hour][el.get("sourceName", "")] += v
-                elif kind == "restingHr" and plausible(kind, v):
-                    hr[d].append(v)
-                elif kind == "hrv" and plausible(kind, v):
-                    hrv[d].append(v)
-                elif kind == "weight" and plausible(kind, _to_kg(v, el.get("unit"))):
-                    weights.append((start, round(_to_kg(v, el.get("unit")), 1)))
-                elif kind in ("sys", "dia") and plausible(kind, v):
-                    bp[start][kind] = round(v)
-                elif kind == "temp":
-                    c = round((v - 32) / 1.8 if el.get("unit") == "degF" else v, 1)
-                    if plausible("temp", c):
-                        temps.append((start, c))
+                return
+            v = _num(el.get("value"))
+            d = start.date()
+            if v is None:
+                return
+            if kind == "steps":
+                steps[d][start.hour][el.get("sourceName", "")] += v
+            elif kind == "restingHr" and plausible(kind, v):
+                hr[d].append(v)
+            elif kind == "hrv" and plausible(kind, v):
+                hrv[d].append(v)
+            elif kind == "weight" and plausible(kind, _to_kg(v, el.get("unit"))):
+                weights.append((start, round(_to_kg(v, el.get("unit")), 1)))
+            elif kind in ("sys", "dia") and plausible(kind, v):
+                bp[start][kind] = round(v)
+            elif kind == "temp":
+                c = round((v - 32) / 1.8 if el.get("unit") == "degF" else v, 1)
+                if plausible("temp", c):
+                    temps.append((start, c))
         elif el.tag == "Workout":
             start, end = parse_dt(el.get("startDate")), parse_dt(el.get("endDate"))
             workouts[start.date()].append(workout(el.get("workoutActivityType"), start, end))
-        if depth == 1:
-            # Free each top-level element when it ends: the export can be several GB.
-            root.clear()
+
+    skipped, stack = 0, []
+    for event, el in iterparse(fh, events=("start", "end"), forbid_dtd=False):
+        if event == "start":
+            stack.append(el)
+            if len(stack) > MAX_DEPTH:  # Apple's export is 4 levels deep
+                raise ImportRefused("This file has a structure that the diary cannot read.")
+            continue
+        stack.pop()
+        try:
+            handle(el)
+        except (ValueError, TypeError, AttributeError, OverflowError):
+            # One broken record (no date, bad value) must not stop the import of the others.
+            skipped += 1
+        # Free every element as soon as it ends, at any depth: the export can be several GB,
+        # and a hostile file can put millions of elements inside one record.
+        el.clear()
+        if stack:
+            stack[-1].remove(el)
 
     days = defaultdict(dict)
     for d, hours in steps.items():
@@ -472,7 +505,7 @@ def _read_export(fh):
         "bp": [row("bp", dt, {"sys": v["sys"], "dia": v["dia"], "pulse": None})
                for dt, v in bp.items() if "sys" in v and "dia" in v],
     }
-    return days, measurements
+    return days, measurements, skipped
 
 
 def import_export(uid, path):
@@ -487,7 +520,7 @@ def import_export(uid, path):
             fh = stack.enter_context(zf.open(info))
         else:
             fh = stack.enter_context(open(path, "rb"))
-        days, measurements = _read_export(_Limited(fh, MAX_UNPACKED))
+        days, measurements, skipped = _read_export(_Limited(fh, MAX_UNPACKED))
 
     dates = sorted(d.isoformat() for d in days)
     added = {}
@@ -501,5 +534,7 @@ def import_export(uid, path):
             n = db.add_measurements(uid, rows)
             if n > 0:
                 added[mtype] = n
-    return {"days": len(dates), "measurements": added,
+    if skipped:
+        log.info("Apple Health import: %d broken records skipped.", skipped)
+    return {"days": len(dates), "measurements": added, "skipped": skipped,
             "first": dates[0] if dates else None, "last": dates[-1] if dates else None}

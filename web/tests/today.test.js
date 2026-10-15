@@ -19,11 +19,6 @@ test('drinks: null → +1 gives 1, null → −1 gives 0 (none), never below 0',
   assert.equal(M.stepDrink(0, -1), 0);
   assert.equal(M.stepDrink(0, 1), 1);
   assert.equal(M.stepDrink(5, -1), 4);
-  const water = { one: 'glass', many: 'glasses' };
-  assert.equal(M.drinkText(water, null), 'Not recorded');
-  assert.equal(M.drinkText(water, 0), 'None');
-  assert.equal(M.drinkText(water, 1), '1 glass');
-  assert.equal(M.drinkText(water, 6), '6 glasses');
 });
 
 test('week: Monday to Sunday around the day, across month ends; never after today', () => {
@@ -51,8 +46,8 @@ test('summaries for collapsed rows', () => {
   assert.equal(M.mealSummary(log.meals.lunch), '');
   assert.equal(M.snacksSummary(log.snacks), 'Apple, Banana');
   assert.equal(M.snacksSummary([]), '');
-  assert.equal(M.drinksSummary(log.drinks), 'Water 6 · Coffee 2');
-  assert.equal(M.drinksSummary({ water: null, coffee: null, alcohol: 0 }), 'Alcohol 0');
+  assert.equal(M.drinksSummary(log.drinks), '6 water · 2 coffee');
+  assert.equal(M.drinksSummary({ water: null, coffee: null, alcohol: 0 }), '0 alcohol');
   assert.equal(M.medsSummary(log, [{ id: 'a' }, { id: 'b' }, { id: 'c' }]), '2 of 3 taken · 1 extra');
   assert.equal(M.medsSummary(normalizeLog({}), []), '');
   assert.equal(M.symptomsSummary(log.symptoms), 'Headache (moderate), Fatigue');
@@ -82,6 +77,7 @@ test('open section at first: the meal of the hour on today, if empty', () => {
   assert.deepEqual([...M.defaultOpen(log, { isToday: true, now: '08:30' })], []);
   assert.deepEqual([...M.defaultOpen(log, { isToday: true, now: '12:10' })], ['lunch']);
   assert.deepEqual([...M.defaultOpen(log, { isToday: false, now: '12:10' })], []);
+  assert.equal(M.defaultOpen(log, { isToday: false, now: '12:10', wide: true }).size, M.SECTION_KEYS.length);
 });
 
 test('symptom chips: own symptoms by frequency, then the defaults, no duplicates', () => {
@@ -139,4 +135,69 @@ test('measurement check names the wrong field', () => {
   assert.ok(both.error);
   assert.equal(both.field, null);
   assert.deepEqual(M.checkMeasurement('bp', { sys: '120', dia: '80', pulse: '' }).value, { sys: 120, dia: 80, pulse: null });
+});
+
+test('meal time: now, or the usual time when the meal is more than 3 hours away', () => {
+  assert.deepEqual(M.mealTime('lunch', '13:10', true), { time: '13:10', usual: false });
+  assert.deepEqual(M.mealTime('breakfast', '15:19', true), { time: '08:00', usual: true });
+  assert.deepEqual(M.mealTime('dinner', '20:05', false), { time: '19:30', usual: true });
+});
+
+test('recent meals: same as yesterday first, then distinct older texts', () => {
+  const day = (date, text) => ({ date, log: { meals: { lunch: { text } } } });
+  const r = M.recentMeals([day('2026-10-13', 'Pasta'), day('2026-10-12', 'pasta'), day('2026-10-11', 'Salad'),
+    day('2026-10-10', 'Soup'), day('2026-10-09', 'Rice'), day('2026-10-08', 'Fish'), day('2026-10-14', 'Today')], 'lunch', '2026-10-14');
+  assert.deepEqual(r.map(x => x.label), ['Same as yesterday', 'Salad', 'Soup', 'Rice']);
+  assert.equal(r[0].text, 'Pasta');
+  assert.deepEqual(M.recentMeals([day('2026-10-11', 'Salad')], 'lunch', '2026-10-14').map(x => x.label), ['Salad']);
+});
+
+const L = raw => normalizeLog(raw);
+
+test('merge: other device changes are kept, mine are put back, same section → mine wins', () => {
+  const base = L({ meals: { breakfast: { time: '07:40', text: 'Oatmeal' } }, drinks: { water: 1 }, notes: 'a',
+    meds: { taken: { mag: { done: false, time: '' } } } });
+  const local = structuredClone(base);
+  local.drinks.water = 3;                         // only here
+  local.notes = 'mine';                           // both sides
+  local.meds.taken.vitd = { done: true, time: '08:00' };
+  const server = structuredClone(base);
+  server.meals.lunch = { time: '12:30', text: 'Soup' }; // only there
+  server.notes = 'theirs';
+  server.meds.taken.mag = { done: true, time: '21:00' };
+  const { log, conflicts } = M.mergeLog(base, local, server);
+  assert.equal(log.drinks.water, 3);
+  assert.equal(log.meals.lunch.text, 'Soup');
+  assert.equal(log.meals.breakfast.text, 'Oatmeal');
+  assert.equal(log.notes, 'mine');
+  assert.deepEqual(log.meds.taken.mag, { done: true, time: '21:00' });
+  assert.deepEqual(log.meds.taken.vitd, { done: true, time: '08:00' });
+  assert.deepEqual(conflicts, ['Notes']);
+  assert.deepEqual(M.mergeLog(base, base, server).log, server);
+});
+
+test('saveMerging: plain save, merge on 409, retry once, then give up', async () => {
+  const base = { version: 4, log: L({ notes: 'a' }) };
+  const local = L({ notes: 'a', activities: 'walk' });
+  const conflict = (log, v) => Object.assign(new Error('Conflict'), { status: 409, data: { log, logVersion: v } });
+  const calls = [];
+  const ok = await M.saveMerging(async (d, l, v) => { calls.push(v); return { logVersion: 5 }; }, 'd', local, base);
+  assert.deepEqual([ok.version, ok.merged, calls], [5, false, [4]]);
+
+  let n = 0;
+  const r = await M.saveMerging(async (d, l, v) => {
+    n++;
+    if (n === 1) throw conflict({ notes: 'b' }, 6);
+    if (n === 2) throw conflict({ notes: 'c', symptoms: [{ name: 'Headache' }] }, 7);
+    assert.equal(v, 7);
+    return { logVersion: 8 };
+  }, 'd', local, base);
+  assert.equal(r.version, 8);
+  assert.equal(r.merged, true);
+  assert.equal(r.log.activities, 'walk');
+  assert.equal(r.log.notes, 'c');
+  assert.equal(r.log.symptoms[0].name, 'Headache');
+
+  await assert.rejects(M.saveMerging(async () => { throw conflict({}, 9); }, 'd', local, base), /Conflict/);
+  await assert.rejects(M.saveMerging(async () => { throw Object.assign(new Error('Down'), { status: 500 }); }, 'd', local, base), /Down/);
 });

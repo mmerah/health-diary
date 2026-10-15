@@ -2,14 +2,14 @@
 // openQuickAdd(ctx, preset) opens a form directly: 'meal' | 'snack' | 'drink' | 'symptom' | 'med' | 'weight' | 'bp' | 'temp' | 'note'.
 // It writes to today, or to the day the Today screen shows. The day is read fresh just before each write.
 import { addDays, label, nowHm, today as todayIso } from '../core/dates.js';
-import { esc, plural } from '../core/format.js';
+import { esc } from '../core/format.js';
 import {
-  DRINKS, MEALS, MEASUREMENTS, PERIODS, activeMeds, asNeededMeds, mealAt, medLabel, normalizeLog, normalizeProfile, periodOf,
+  DRINKS, MEALS, MEASUREMENTS, PERIODS, activeMeds, asNeededMeds, drinkSummary, mealAt, medLabel, normalizeLog, normalizeProfile, periodOf,
 } from '../core/schema.js';
 import { ICON, closeSheet, openSheet, toast } from '../core/ui.js';
-import { appendMeal, appendNote, checkMeasurement, drinkText, newSymptom, stepDrink } from './today-model.js';
+import { appendMeal, appendNote, checkMeasurement, mealTime, newSymptom, recentMeals, stepDrink } from './today-model.js';
 import { SEV_OPTIONS, radios } from './today-view.js';
-import { forgetSymptomOrder, loadSymptomOrder } from './today.js';
+import { forgetSymptomOrder, loadSymptomOrder, saveOtherDay } from './today.js';
 
 const TILES = [
   ['meal', 'Meal', ICON.meal], ['snack', 'Snack', ICON.snack], ['drink', 'Drink', ICON.drink],
@@ -36,7 +36,12 @@ export function openQuickAdd(ctx, preset) {
   const body = openSheet({
     title: isToday ? 'Quick add' : `Add to ${dayName(date)}`,
     html: '<div class="qa" data-qa></div>',
-    onAction: (act, el, e) => safely(q, () => onAction(q, act, el, e)),
+    // Drink taps are not blocked while a save runs: they are counted and saved together.
+    onAction: (act, el, e) => (act === 'qd' ? drinkTap(q, el) : safely(q, () => onAction(q, act, el, e))),
+    onClose: () => {
+      const saving = q.form.ops && q.form.ops.length ? saveDrinks(q).catch(reportError) : Promise.resolve();
+      saving.then(() => { if (q.saved) refreshScreen(q); });
+    },
     onSubmit: form => safely(q, () => onSubmit(q, form)),
     onInput: el => onInput(q, el),
   });
@@ -48,13 +53,19 @@ export function openQuickAdd(ctx, preset) {
 // ---------- Drawing
 
 function show(q, view) {
+  if (q.form && q.form.ops && q.form.ops.length) saveDrinks(q).catch(reportError); // leaving the Drink view
   q.view = view;
   q.form = {};
   q.root.innerHTML = view === 'home' ? home(q) : `${back(view)}<div class="qa-body" data-qa-body>${forms[view](q)}</div>`;
   const first = q.root.querySelector('[autofocus]')
     || q.root.querySelector(view === 'home' ? '.qa-tile' : '.qa-body button')
     || q.root.querySelector('.qa-head button');
-  if (first) first.focus();
+  if (view === 'drink') {
+    // Focus the title, so Enter does not add a drink by accident.
+    const title = document.getElementById('sheet-title');
+    title.tabIndex = -1;
+    title.focus();
+  } else if (first) first.focus();
   q.initialFocus = first; // loaders move focus to their content only if it is still here
   if (loaders[view]) loaders[view](q);
 }
@@ -78,13 +89,16 @@ const forms = {
   meal(q) {
     const m = mealAt(nowHm());
     q.form.meal = m.key;
+    const t = mealTime(m.key, nowHm(), q.isToday);
     return `<form class="stack" data-form="log-meal" novalidate>
       <span class="label" id="qa-meal-l">Which meal?</span>
       ${radios({ name: 'pick-meal', i: 0, options: MEALS.map(x => ({ value: x.key, label: x.label })), value: m.key, labelId: 'qa-meal-l' })}
       <p class="hint qa-already" data-already hidden></p>
+      <div class="chips" role="group" aria-label="Recent meals" data-recent hidden></div>
       <label class="field"><span>What did you eat?</span><textarea name="text" rows="3" autofocus placeholder="Food and drink"></textarea></label>
       <p class="field-error" role="alert" data-error></p>
-      ${timeField(q, q.isToday ? nowHm() : m.typical)}
+      ${timeField(q, t.time)}
+      <p class="hint" data-time-hint>${esc(timeHint(q, m.key, t))}</p>
       ${saveBtn()}
     </form>`;
   },
@@ -96,10 +110,17 @@ const forms = {
       ${saveBtn()}
     </form>`;
   },
-  drink() {
-    return `<p class="hint">One tap adds one and saves.</p>
-      <div class="qa-drinks">${DRINKS.map(d => `<button type="button" class="qa-tile qa-drink" data-act="drink" data-v="${esc(d.key)}">
-        ${ICON.plus}<span>${esc(`1 ${d.label}`)}</span><span class="qa-now" data-now="${esc(d.key)}">&nbsp;</span></button>`).join('')}</div>`;
+  drink(q) {
+    q.form.ops = [];
+    return `<p class="hint">${esc(`Each tap saves at once${q.isToday ? '' : ` to ${q.dayLabel}`}.`)}</p>
+      <ul class="drink-list qa-drink-list">${DRINKS.map(d => `<li class="drink" data-drink="${esc(d.key)}">
+        <span class="drink-name">${esc(d.label)}<span class="drink-val is-empty" data-now="${esc(d.key)}" aria-live="polite">Loading…</span></span>
+        <span class="stepper">
+          <button type="button" class="icon-btn step" data-act="qd" data-v="${esc(d.key)}" data-d="-1" aria-label="${esc(`One ${d.one} less of ${d.label.toLowerCase()}`)}">${ICON.minus}</button>
+          <span class="step-num" aria-hidden="true" data-num="${esc(d.key)}">–</span>
+          <button type="button" class="icon-btn step" data-act="qd" data-v="${esc(d.key)}" data-d="1" aria-label="${esc(`One more ${d.one} of ${d.label.toLowerCase()}`)}">${ICON.plus}</button>
+        </span></li>`).join('')}</ul>
+      <button type="button" class="btn wide" data-sheet-close>Done</button>`;
   },
   symptom(q) {
     const period = q.isToday ? periodOf(nowHm()) : null;
@@ -109,11 +130,11 @@ const forms = {
       <span class="label" id="qa-sym-l">Which symptom?</span>
       <div class="chips" role="group" aria-labelledby="qa-sym-l" data-chips>${loading('Loading…')}</div>
       <label class="field"><span class="sr-only">Other symptom</span><input type="text" name="other" autocomplete="off" maxlength="80" placeholder="Other symptom"></label>
-      <div class="sym-field needs" data-sev>
-        <span class="label" id="qa-sev-l">How bad?</span>
+      <div class="sym-field" data-sev>
+        <span class="label-row"><span class="label" id="qa-sev-l">How bad?</span><span class="hint" data-sev-hint>Not chosen yet</span></span>
         ${radios({ name: 'pick-sev', i: 0, options: SEV_OPTIONS, value: null, labelId: 'qa-sev-l', cls: 'sev-seg' })}
       </div>
-      <span class="label" id="qa-when-l">When?</span>
+      <span class="label-row"><span class="label" id="qa-when-l">When?</span></span>
       ${radios({ name: 'pick-when', i: 0, options: whenOptions(q), value: q.form.when, labelId: 'qa-when-l', cls: 'qa-when' })}
       <p class="field-error" role="alert" data-error></p>
       ${saveBtn()}
@@ -155,17 +176,19 @@ function measureForm(q, type) {
 
 const loaders = {
   async meal(q) {
-    const log = await dayLog(q);
+    const [log, days] = await Promise.all([dayLog(q), q.ctx.api.listDays(addDays(q.date, -14), addDays(q.date, -1)).catch(() => [])]);
+    if (q.view !== 'meal') return;
     q.form.log = log;
+    q.form.recentDays = days;
     showAlready(q);
+    showRecent(q);
   },
   async drink(q) {
     const log = await dayLog(q);
-    if (!log || q.view !== 'drink') return;
-    for (const d of DRINKS) {
-      const el = q.root.querySelector(`[data-now="${d.key}"]`);
-      if (el) el.textContent = `Now: ${drinkText(d, log.drinks[d.key]).toLowerCase()}`;
-    }
+    if (q.view !== 'drink') return;
+    q.form.drinks = log ? { ...log.drinks } : null;
+    if (q.form.drinks) q.form.ops.forEach(o => { q.form.drinks[o.key] = stepDrink(q.form.drinks[o.key], o.d); });
+    showDrinks(q);
   },
   async symptom(q) {
     const names = await loadSymptomOrder(q.ctx.api);
@@ -223,6 +246,76 @@ async function dayLog(q, strict) {
   try { return normalizeLog((await q.ctx.api.getDay(q.date)).log); } catch (e) { if (strict) throw e; return null; }
 }
 
+function timeHint(q, key, t) {
+  const def = MEALS.find(x => x.key === key);
+  return q.isToday && t.usual ? `The time is set to the usual ${def.label.toLowerCase()} time. Change it if needed.` : '';
+}
+
+/** One-tap texts: "Same as yesterday" and the last distinct texts of this meal (14 days). */
+function showRecent(q) {
+  const box = q.root.querySelector('[data-recent]');
+  if (!box) return;
+  const list = recentMeals(q.form.recentDays || [], q.form.meal, q.date);
+  box.hidden = !list.length;
+  box.innerHTML = list.map(r => `<button type="button" class="chip" data-act="use-meal" data-text="${esc(r.text)}" title="${esc(r.text)}">${esc(r.label)}</button>`).join('');
+}
+
+const drinkCount = (d, v) => (v == null ? 'Not recorded' : v === 0 ? 'None' : `${v} ${v === 1 ? d.one : d.many}`);
+
+/** Live counts in the Drink view. */
+function showDrinks(q) {
+  for (const d of DRINKS) {
+    const v = q.form.drinks ? q.form.drinks[d.key] : undefined;
+    const val = q.root.querySelector(`[data-now="${d.key}"]`), n = q.root.querySelector(`[data-num="${d.key}"]`);
+    if (!val) continue;
+    val.textContent = v === undefined ? 'Could not load the count' : drinkCount(d, v);
+    val.classList.toggle('is-empty', v == null);
+    n.textContent = v == null ? '–' : String(v);
+    const minus = q.root.querySelector(`[data-act="qd"][data-v="${d.key}"][data-d="-1"]`);
+    if (minus) minus.disabled = v === 0;
+  }
+}
+
+/** A drink tap: count shown at once, saved a moment later (several taps make one save). */
+function drinkTap(q, el) {
+  const key = el.dataset.v, d = Number(el.dataset.d);
+  q.form.ops.push({ key, d });
+  if (q.form.drinks) { q.form.drinks[key] = stepDrink(q.form.drinks[key], d); showDrinks(q); }
+  clearTimeout(q.drinkTimer);
+  q.drinkTimer = setTimeout(() => saveDrinks(q).catch(reportError), 700);
+}
+
+const reportError = e => { console.error(e); toast(e.message || 'Something went wrong.', { tone: 'error' }); };
+
+async function saveDrinks(q) {
+  clearTimeout(q.drinkTimer);
+  const ops = q.form.ops.splice(0);
+  if (!ops.length) return;
+  let before, after;
+  try {
+    await writeDay(q, log => {
+      before = { ...log.drinks };
+      ops.forEach(o => { log.drinks[o.key] = stepDrink(log.drinks[o.key], o.d); });
+      after = { ...log.drinks };
+    });
+  } catch (e) {
+    if (q.view === 'drink' && q.root.isConnected) { q.form.drinks = null; loaders.drink(q); }
+    throw new Error(`The drinks were not saved. ${e.message}`);
+  }
+  q.saved = true;
+  if (q.view === 'drink' && q.root.isConnected && !q.form.ops.length) { q.form.drinks = { ...after }; showDrinks(q); }
+  const keys = [...new Set(ops.map(o => o.key))];
+  toast(`Saved: ${drinkSummary(after) || 'drinks'}${q.isToday ? '' : ` (${q.dayLabel})`}`, {
+    action: { label: 'Undo', run: () => undoDrinks(q, keys, before).catch(reportError) },
+  });
+}
+
+async function undoDrinks(q, keys, before) {
+  let after;
+  await writeDay(q, log => { keys.forEach(k => { log.drinks[k] = before[k]; }); after = { ...log.drinks }; });
+  if (q.view === 'drink' && q.root.isConnected) { q.form.drinks = after; showDrinks(q); } else refreshScreen(q);
+}
+
 function showAlready(q) {
   const el = q.root.querySelector('[data-already]');
   if (!el || !q.form.log) return;
@@ -242,16 +335,30 @@ async function commitLog(q, mutate, message) {
     const ok = await ctx.screen.leave(ctx);
     if (ok === false) throw new Error('Your last change is not saved yet. Check the connection, then try again.');
   }
-  const log = normalizeLog((await ctx.api.getDay(date)).log);
-  mutate(log);
-  await ctx.api.saveLog(date, log);
-  finish(q, typeof message === 'function' ? message(log) : message);
+  let changed;
+  await saveOtherDay(date, log => { mutate(log); changed = log; });
+  finish(q, typeof message === 'function' ? message(changed) : message);
+}
+
+/** Writes the day without closing the sheet (drinks). Same safety as commitLog. */
+async function writeDay(q, mutate) {
+  const { ctx } = q;
+  if (ctx.screen && ctx.screen.leave && (await ctx.screen.leave(ctx)) === false) {
+    throw new Error('Your last change is not saved yet. Check the connection, then try again.');
+  }
+  await saveOtherDay(q.date, mutate);
+}
+
+/** Draws the screen behind the sheet again (only when the sheet is closed: drawing closes it). */
+function refreshScreen(q) {
+  if (['today', 'body'].includes(q.ctx.tab) && !document.querySelector('#sheet-root .sheet')) q.ctx.refresh();
 }
 
 function finish(q, message) {
+  q.saved = false; // the screen is drawn here, not again on close
   closeSheet();
   toast(message);
-  if (['today', 'body'].includes(q.ctx.tab)) q.ctx.refresh();
+  refreshScreen(q);
 }
 
 const where = q => (q.isToday ? 'today' : q.dayLabel);
@@ -282,22 +389,29 @@ function fieldError(q, text, field) {
 async function onAction(q, act, el) {
   switch (act) {
     case 'view': show(q, el.dataset.v); return;
-    case 'drink': {
-      const d = DRINKS.find(x => x.key === el.dataset.v);
-      await commitLog(q, log => { log.drinks[d.key] = stepDrink(log.drinks[d.key], 1); },
-        log => `${d.label}: ${plural(log.drinks[d.key], d.one, d.many)} ${q.isToday ? 'today' : `on ${q.dayLabel}`}`);
-      return;
-    }
-    case 'pick-meal':
+    case 'pick-meal': {
       setRadio(el);
       q.form.meal = el.dataset.v;
+      if (!q.form.timeTouched) {
+        const t = mealTime(q.form.meal, nowHm(), q.isToday);
+        q.root.querySelector('[name="time"]').value = t.time;
+        q.root.querySelector('[data-time-hint]').textContent = timeHint(q, q.form.meal, t);
+      }
       showAlready(q);
+      showRecent(q);
       return;
+    }
+    case 'use-meal': {
+      const text = q.root.querySelector('[name="text"]');
+      text.value = el.dataset.text;
+      fieldError(q, '');
+      q.root.querySelector('button[type="submit"]').focus();
+      return;
+    }
     case 'pick-sev':
       setRadio(el);
       q.form.severity = Number(el.dataset.v);
-      el.closest('[data-sev]').classList.remove('needs');
-      el.closest('[data-sev]').querySelector('.label').textContent = 'How bad';
+      q.root.querySelector('[data-sev-hint]').textContent = '';
       return;
     case 'pick-when': setRadio(el); q.form.when = el.dataset.v; return;
     case 'pick-sym': {
@@ -390,6 +504,7 @@ async function onSubmit(q, form) {
 }
 
 function onInput(q, el) {
+  if (el.name === 'time') { q.form.timeTouched = true; const h = q.root.querySelector('[data-time-hint]'); if (h) h.textContent = ''; }
   if (el.name === 'other' && el.value) {
     q.root.querySelectorAll('[data-act="pick-sym"]').forEach(c => c.setAttribute('aria-pressed', 'false'));
     q.form.symptom = null;

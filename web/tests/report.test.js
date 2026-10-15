@@ -33,7 +33,17 @@ test('AI report on the sample data: no personal detail leaks', () => {
   }
 });
 
-test('AI report: framing, question first and last, relative dates, no weekday names', () => {
+test('long periods: monthly summaries without absolute dates in AI mode, symptom days only in the table', () => {
+  const { md, model } = aiReport({ from: addDays(TO, -364) });
+  assert.ok(model.monthly.length >= 3);
+  assert.match(md, /## Month by month/);
+  assert.match(md, /\|D-\d+ to D-?\d+\|\d+ of \d+\|/);
+  assert.ok(!/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sept?|Oct|Nov|Dec) 20\d\d\b/.test(md), 'no month names with a year');
+  assert.equal(model.daily.tableMode, 'symptom-days');
+  assert.ok(model.daily.rows.every(r => r.symptomDay || r.partial));
+});
+
+test('AI report: framing, question first and last, relative dates with weekday names', () => {
   const { md } = aiReport();
   assert.match(md, /^# Health report \(anonymized\)/);
   assert.match(md, /self-reported/);
@@ -44,15 +54,16 @@ test('AI report: framing, question first and last, relative dates, no weekday na
   const first = md.indexOf(QUESTION), last = md.lastIndexOf(QUESTION);
   assert.ok(first > 0 && first < md.indexOf('## Key points'), 'question at the top');
   assert.ok(last > md.indexOf('## Daily log'), 'question repeated at the end');
-  assert.ok(!/\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b/.test(md), 'no weekday names');
-  assert.match(md, /\|D-1\|/);
-  assert.match(md, /D0 \(today, partial\)/);
+  // Weekday names are allowed: they show weekend patterns and do not identify anyone.
+  assert.match(md, /\|D-1 (Mon|Tue|Wed|Thu|Fri|Sat|Sun)\|/);
+  assert.match(md, /D0 \w{3} \(today, partial\)/);
 });
 
-test('AI report: 90 days of sample data stay near 4,000 tokens by default', () => {
+test('AI report: 90 days of sample data stay short by default', () => {
   const { md } = aiReport();
-  const tokens = md.length / 3.7;
-  assert.ok(tokens < 4300, `about ${Math.round(tokens)} tokens`);
+  const words = md.match(/\S+/g).length;
+  assert.ok(words < 3000, `${words} words`);
+  assert.ok(md.length / 3.7 < 4300, `about ${Math.round(md.length / 3.7)} tokens`);
   const full = aiReport({ fullDaily: true }).md;
   assert.ok(full.length > md.length * 1.5, 'full daily details add the food and every day');
   assert.match(full, /breakfast:/);
@@ -99,7 +110,10 @@ test('sections can be switched off', () => {
 test('documents: period plus the latest per category, excluded ones out, unavailable said', () => {
   const from = addDays(TO, -89);
   const sel = selectDocuments(db.documents, { from, to: TO });
-  assert.deepEqual(sel.map(d => d.id), [101, 102, 104]);
+  assert.deepEqual(sel.map(d => d.id), [101, 102, 103, 104], 'documents of the 2 years before the period are in');
+  const old = [{ id: 1, date: '2019-01-01', category: 'Cardiology', content: 'Normal.' }, { id: 2, date: '2018-01-01', category: 'Cardiology', content: 'Contrôle dans 10 ans.' },
+    { id: 3, date: '2017-01-01', category: 'Cardiology', content: 'Normal.' }];
+  assert.deepEqual(selectDocuments(old, { from, to: TO }).map(d => d.id), [1, 2], 'the latest of a category, and older ones with a follow-up');
   assert.deepEqual(selectDocuments(db.documents, { from, to: TO, scope: 'all' }).map(d => d.id), [101, 102, 103, 104]);
   assert.deepEqual(selectDocuments(db.documents, { from, to: TO, excluded: [102] }).map(d => d.id), [101, 103, 104]);
   const { md } = aiReport({}, data({ documents: null, documentsError: 'Paperless is down' }));
@@ -157,6 +171,51 @@ test('AI mode with dates kept: ISO dates, date of birth still hidden', () => {
 test('empty data: the report still renders', () => {
   const model = buildReportModel({ profile: {}, days: [], measurements: [], documents: [], today: TO }, { from: addDays(TO, -29), to: TO, audience: 'ai' });
   const md = toMarkdown(model, { redactor: makeRedactor({}), relative: true });
-  assert.match(md, /Nothing stands out/);
+  assert.match(md, /Not enough diary days to spot changes \(0 days\)/);
+  assert.ok(!md.includes('Nothing stands out'), 'no false reassurance with little data');
+  assert.ok(!md.includes('## Profile'), 'no empty heading');
   assert.match(toHtml(model), /rp-doc/);
+});
+
+test('documents with lab values keep their other lines', () => {
+  const d = data({ documents: [{ id: 9, date: addDays(TO, -3), title: 'Bilan', category: 'Blood test', correspondent: '',
+    content: 'Glucose 0.95 g/L (0.70-1.10)\nAntigène HBs : POSITIF\nCommentaire : hémolyse légère' }] });
+  const model = buildReportModel(d, { from: addDays(TO, -89), to: TO, audience: 'doctor' });
+  const doc = model.documents.list[0];
+  assert.ok(doc.hasLabs);
+  assert.match(doc.excerpt.text, /Antigène HBs : POSITIF/);
+  assert.match(toHtml(model), /Antigène HBs : POSITIF/);
+});
+
+test('little data: no false reassurance, correct plurals', () => {
+  const d = data({ days: allDays().filter(x => x.date === addDays(TO, -2)) });
+  const model = buildReportModel(d, { from: addDays(TO, -29), to: TO, audience: 'doctor' });
+  const md = toMarkdown(model);
+  assert.match(md, /Not enough diary days to spot changes \(1 day\)/);
+  assert.ok(!/\b1 days\b/.test(md) && !/\b1 days\b/.test(toHtml(model)), 'no "1 days"');
+});
+
+test('doctor daily log: symptom days and the days around them, notes text, drinks in words', () => {
+  const model = buildReportModel(data(), { from: addDays(TO, -89), to: TO, audience: 'doctor' });
+  assert.equal(model.daily.tableMode, 'around');
+  const sym = new Set(model.daily.rows.filter(r => r.symptomDay).map(r => r.date));
+  for (const r of model.daily.rows) {
+    assert.ok(r.symptomDay || r.partial || sym.has(addDays(r.date, 1)) || sym.has(addDays(r.date, -1)), r.date);
+  }
+  const html = toHtml(model);
+  assert.match(html, /\d water · \d coffee · \d alcohol/);
+  assert.ok(!/<td[^>]*>\d\/\d\/\d<\/td>/.test(html), 'no "7/2/0"');
+  assert.match(html, /class="rp-notes">Palpitations for about 10 min/);
+  const all = buildReportModel(data(), { from: addDays(TO, -89), to: TO, audience: 'doctor', fullDaily: true });
+  assert.equal(all.daily.tableMode, 'all');
+  assert.ok(all.daily.rows.length > model.daily.rows.length);
+});
+
+test('key points: mean home BP and the strongest pattern when there are enough days', () => {
+  const { model, md } = aiReport();
+  assert.match(md, /Mean: \d+\/\d+ mmHg over 3 readings/);
+  const assoc = model.flags.filter(f => f.kind === 'association');
+  assert.ok(assoc.length >= 1 && assoc.length <= 2);
+  assert.ok(assoc.every(f => !f.assoc.small));
+  assert.match(md, /This is a pattern, not a cause\./);
 });

@@ -25,12 +25,16 @@ body { font-size: 10.5pt; line-height: 1.4; }
 .rp-sec h3, .rp-sub { break-after: avoid; }
 .rp-flag, .rp-docitem, .rp-day, .rp-stats > div, tr { break-inside: avoid; }
 .table-wrap { overflow: visible !important; }
-/* Denser summary on paper */
-.rp-meas { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4pt 14pt; align-items: start; }
-.rp-meas-block { break-inside: avoid; }
-.rp-stats { grid-template-columns: repeat(5, minmax(0, 1fr)) !important; }
-/* The summary pages first; the daily log starts on a new page. */
-.rp-sec[aria-labelledby="rp-daily"] { break-before: page; }
+/* Dense on paper: a 90-day report fits in a few pages. */
+.rp-doc { font-size: 9pt; gap: 9pt; }
+.rp-sec { gap: 4pt; }
+.rp-note, .rp-muted { font-size: 8pt; }
+.rp-daily { font-size: 7.8pt; }
+.rp-daily td, .rp-daily th { padding: 1.5pt 4pt; }
+.rp-daily td.rp-notes { font-size: 7.5pt; width: 34%; }
+.rp-daily td:first-child { width: 11%; }
+.rp-daily .rp-sym .rp-muted { font-size: 7pt; }
+.rp-symrow { padding: 3pt 0; font-size: 8.5pt; }
 .rp-days { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6pt; align-items: start; }
 .rp-day { padding: 5pt 7pt; font-size: 8.5pt; }
 .rp-day ul { font-size: 8.5pt; }

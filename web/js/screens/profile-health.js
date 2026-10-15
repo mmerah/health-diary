@@ -6,10 +6,13 @@ import { createAutosave } from '../core/autosave.js';
 import { medLabel, newId, normalizeProfile } from '../core/schema.js';
 import { closeSheet, ICON, openSheet, toast } from '../core/ui.js';
 import { medStatus, parseHeight, parseMedForm, sortMeds } from './profile-account.js';
+import { mergeProfile } from './profile-merge.js';
 
 const KEY = 'profile';
 let saver = null;
-let P = null; // the profile being edited
+let P = null;    // the profile being edited (live)
+let base = null; // { version, profile }: the newest server copy the edits build on
+let ours = new Set(); // versions written by this device since `base` last came from the server
 
 const SEXES = [['', 'Not set'], ['Female', 'Female'], ['Male', 'Male'], ['Intersex', 'Intersex'], ['Prefer not to say', 'Prefer not to say']];
 const HISTORY = [
@@ -20,15 +23,75 @@ const HISTORY = [
   ['lifestyle', 'Lifestyle and other notes', 'Example: Non-smoker. Office job.'],
 ];
 
-/** Loads the profile. Edits not saved yet (from an earlier visit) win over the server copy. */
+/**
+ * Loads the profile. Edits not saved yet (from an earlier visit) win over the server copy.
+ * The queued value carries the version it started from: { profile, baseVersion, base }.
+ */
 export async function loadProfile(ctx) {
-  if (!saver) saver = createAutosave(KEY, (_, p) => ctx.api.saveProfile(p));
-  P = normalizeProfile(saver.has(KEY) ? saver.get(KEY) : await ctx.api.getProfile());
+  if (!saver) saver = createAutosave(KEY, (_, entry) => saveVersioned(ctx.api, entry));
+  if (saver.has(KEY)) {
+    const entry = saver.get(KEY);
+    P = normalizeProfile(entry && entry.profile ? entry.profile : entry); // older queues hold a plain profile
+    base = entry && entry.base ? { version: entry.baseVersion, profile: entry.base } : null;
+    ours = new Set();
+  } else {
+    const raw = await ctx.api.getProfile();
+    const version = raw && raw.version != null ? raw.version : null; // non-enumerable: read it before copying
+    P = normalizeProfile(raw);
+    base = { version, profile: structuredClone(P) };
+    ours = new Set([version]);
+  }
   return P;
 }
 
 export const flushProfile = () => (saver ? saver.flush() : Promise.resolve());
-const queue = () => saver.queue(KEY, P);
+const queue = () => saver.queue(KEY, { profile: P, baseVersion: base ? base.version : null, base: base ? base.profile : null });
+
+/**
+ * Saves with the version the edits started from. On 409 (another device saved in between):
+ * merge field by field, save again once with the new version, and tell the user.
+ */
+async function saveVersioned(api, entry) {
+  const sent = normalizeProfile(entry && entry.profile ? entry.profile : entry);
+  let baseVersion = entry && entry.profile ? entry.baseVersion : null;
+  let baseCopy = entry && entry.profile ? entry.base : null;
+  // Newer versions written by this device only: this entry is simply newer, build on the latest.
+  if (base && baseVersion != null && ours.has(baseVersion)) { baseVersion = base.version; baseCopy = base.profile; }
+  let toSave = sent, merged = false;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const r = await api.saveProfile(toSave, baseVersion == null ? undefined : baseVersion);
+      const version = r && r.version != null ? r.version : null;
+      base = { version, profile: structuredClone(toSave) };
+      ours.add(version);
+      break;
+    } catch (e) {
+      if (e.status !== 409 || !e.data || attempt > 0) throw e;
+      const theirs = normalizeProfile(e.data.profile);
+      toSave = mergeProfile(baseCopy && normalizeProfile(baseCopy), sent, theirs);
+      baseVersion = e.data.version;
+      baseCopy = theirs;
+      ours = new Set([e.data.version]);
+      merged = true;
+    }
+  }
+  if (merged) {
+    // Keep edits made while saving: three-way merge of the live copy onto the merged result.
+    P = normalizeProfile(mergeProfile(sent, P, toSave));
+    redrawFields();
+    toast('Merged with changes from another device.');
+  }
+}
+
+/** After a merge: show the new values, but do not touch the field the user is typing in. */
+function redrawFields() {
+  document.querySelectorAll('[data-pfield]').forEach(el => {
+    if (el === document.activeElement) return;
+    const v = P[el.dataset.pfield];
+    el.value = v == null ? '' : String(v);
+  });
+  redrawMeds();
+}
 
 // ---------- Rendering
 
@@ -49,8 +112,8 @@ function aboutCard() {
       <div class="field"><label class="label" for="p-sex">Sex</label>
         <select id="p-sex" data-pfield="sex">${SEXES.map(([v, l]) => `<option value="${esc(v)}"${(P.sex || '') === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
       ${textField('heightCm', 'Height (cm)', { type: 'number', attrs: 'inputmode="numeric" min="50" max="250" step="1"' })}
-      ${textField('ethnicity', 'Ethnicity', { attrs: 'maxlength="100"' })}
     </div>
+    ${textField('ethnicity', 'Ethnicity', { attrs: 'maxlength="100"' })}
   </section>`;
 }
 

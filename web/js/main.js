@@ -6,7 +6,9 @@
 //   forms:   { name(form, event, ctx) } for <form data-form="name"> submits (preventDefault is done)
 //   input(el, event, ctx)               for input and change events inside the screen
 import { api } from './api/index.js';
+import { flushAll, resumeAll } from './core/autosave.js';
 import { esc } from './core/format.js';
+import { session } from './core/session.js';
 import { clearLocalData, closeSheet, ICON, setSaveState, store, toast } from './core/ui.js';
 import auth from './screens/auth.js';
 import body from './screens/body.js';
@@ -29,18 +31,40 @@ const ctx = {
   /** Go to a tab. params are passed to render (for example { date }). */
   go: (tab, params) => navigate(tab, params),
   /** Draw the current screen again with the same params. */
-  refresh: () => navigate(ctx.tab, ctx.params, { keepScroll: true }),
+  refresh: () => navigate(ctx.tab, ctx.params, { keepScroll: true, history: 'replace' }),
   /** Opens the quick-add sheet. preset: 'meal' | 'symptom' | 'weight' | … */
   quickAdd: preset => import('./screens/quickadd.js').then(m => m.openQuickAdd(ctx, preset)),
   logout,
   onLogin,
 };
 
-// ---------- Navigation
+// ---------- Navigation and addresses
+// Each screen has an address, so the browser back button and the back gesture work:
+//   #today  #today/2026-10-07  #trends  #records  #report  #profile  #profile/settings
+
+const SLUG = { body: 'trends' };           // tab id → address word
+const TAB_OF = { trends: 'body', body: 'body' }; // address word → tab id (#body still works)
+
+export function routeOf(hash) {
+  const [word, arg] = String(hash || '').replace(/^#/, '').split('/');
+  const tab = TAB_OF[word] || (SCREENS[word] ? word : null);
+  if (!tab) return null;
+  if (tab === 'today' && /^\d{4}-\d{2}-\d{2}$/.test(arg || '')) return { tab, params: { date: arg } };
+  if (tab === 'profile' && arg === 'settings') return { tab, params: { view: 'settings' } };
+  return { tab, params: {} };
+}
+
+function hashOf(tab, params) {
+  let h = SLUG[tab] || tab;
+  if (tab === 'today' && params.date) h += `/${params.date}`;
+  if (tab === 'profile' && params.view === 'settings') h += '/settings';
+  return `#${h}`;
+}
 
 let renderSeq = 0;
 
-async function navigate(tab, params = {}, { keepScroll = false } = {}) {
+/** history: 'push' (a new step for the back button), 'replace', or 'none' (we came from the back button). */
+async function navigate(tab, params = {}, { keepScroll = false, history: mode = 'push' } = {}) {
   if (!SCREENS[tab]) tab = 'today';
   closeSheet();
   // Save pending edits of the screen we leave. A failed save stays queued (see autosave.js).
@@ -51,7 +75,10 @@ async function navigate(tab, params = {}, { keepScroll = false } = {}) {
   ctx.params = params;
   ctx.screen = SCREENS[tab];
   store.set('tab', tab);
-  if (location.hash.slice(1) !== tab) history.replaceState(null, '', `#${tab}`);
+  const hash = hashOf(tab, params);
+  if (mode !== 'none' && location.hash !== hash) {
+    if (mode === 'push') history.pushState(null, '', hash); else history.replaceState(null, '', hash);
+  }
   document.querySelectorAll('.tabbar [data-tab]').forEach(b => {
     if (b.dataset.tab === tab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   });
@@ -77,6 +104,11 @@ document.querySelector('.tabbar').addEventListener('click', e => {
   navigate(b.dataset.tab, b.dataset.tab === 'today' ? { date: null } : {});
 });
 document.getElementById('fab').addEventListener('click', () => ctx.quickAdd());
+window.addEventListener('popstate', () => {
+  if (!ctx.user) return;
+  const r = routeOf(location.hash) || { tab: 'today', params: {} };
+  navigate(r.tab, r.params, { history: 'none' });
+});
 
 // ---------- Event dispatch to the current screen
 
@@ -129,22 +161,29 @@ ctx.themes = THEMES;
 ctx.getTheme = getTheme;
 ctx.setTheme = setTheme;
 
+const systemDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches;
+/** The theme the user sees now: 'light' or 'dark'. */
+const shownTheme = () => { const t = getTheme(); return t === 'auto' ? (systemDark() ? 'dark' : 'light') : t; };
+
 function drawThemeButton() {
-  const t = getTheme(), name = THEMES.find(x => x[0] === t)[1];
+  const t = getTheme(), next = shownTheme() === 'dark' ? 'light' : 'dark';
   const btn = document.getElementById('theme-btn');
   btn.innerHTML = ICON[`theme-${t}`];
-  btn.setAttribute('aria-label', `Theme: ${name}. Change theme.`);
-  btn.title = `Theme: ${name}`;
+  btn.setAttribute('aria-label', `Switch to ${next} theme`);
+  btn.title = t === 'auto' ? `Theme: Auto (${shownTheme()}). Tap for ${next}.` : `Theme: ${t}. Tap for ${next}.`;
 }
+// One tap always changes what you see: light ↔ dark. "Auto" (follow the device) is in Profile → Settings.
 document.getElementById('theme-btn').addEventListener('click', () => {
-  const order = THEMES.map(x => x[0]);
-  setTheme(order[(order.indexOf(getTheme()) + 1) % order.length]);
-  toast(`Theme: ${THEMES.find(x => x[0] === getTheme())[1]}`);
+  const next = shownTheme() === 'dark' ? 'light' : 'dark';
+  setTheme(next);
+  toast(`${next === 'dark' ? 'Dark' : 'Light'} theme. Choose Auto in Profile → Settings.`);
 });
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', drawThemeButton);
 
 // ---------- Login, logout, start-up
 
 function showAuth(mode, message) {
+  closeSheet();
   ctx.screen = null;
   ctx.tab = null;
   document.body.classList.add('is-auth');
@@ -154,27 +193,45 @@ function showAuth(mode, message) {
 
 function onLogin(user) {
   ctx.user = user;
+  session.set(user);
+  resumeAll(); // edits this user made earlier on this device and that were not saved yet
   document.body.classList.remove('is-auth');
-  const start = location.hash.slice(1);
-  navigate(TABS.includes(start) ? start : store.get('tab', 'today'));
+  const r = routeOf(location.hash);
+  if (r) navigate(r.tab, r.params, { history: 'replace' });
+  else navigate(store.get('tab', 'today'), {}, { history: 'replace' });
   if (user.notice) {
     toast(user.notice, { ms: 15000, action: { label: 'OK', run: () => api.dismissNotice().catch(() => {}) } });
   }
 }
 
-async function logout(message = 'You are logged out.') {
-  if (ctx.screen && ctx.screen.leave) await ctx.screen.leave(ctx).catch(() => {});
-  await api.logout().catch(() => {});
-  clearLocalData();
-  ctx.user = null;
-  showAuth('login', message);
+// After logout or the end of a session the page reloads. That empties every in-memory cache,
+// so nothing of one user is left for the next user of the same device.
+const ENDED = 'hd-session-ended';
+
+/** logout() for the Log out button. After the account was deleted: logout(message, { deleted: true }). */
+async function logout(message = 'You are logged out.', { deleted = false } = {}) {
+  if (!deleted && !(await flushAll())) {
+    throw new Error('Some changes are not saved yet. Connect to the server, wait for "Saved", then log out.');
+  }
+  try {
+    if (!deleted) await api.logout(); // a deleted account has no session left
+  } catch (e) {
+    // Offline: the session cookie would stay valid, so do not pretend the logout worked.
+    throw new Error(`You are not logged out: ${e.message}`);
+  }
+  clearLocalData(session.uid);
+  sessionStorage.setItem(ENDED, message);
+  location.reload();
 }
 
 window.addEventListener('diary:logged-out', () => {
   if (!ctx.user) return;
   ctx.user = null;
+  // Unsaved edits stay in this browser for this user only, and are sent after the next login.
+  session.set(null);
   setSaveState('');
-  showAuth('login', 'Your session has ended. Please log in again.');
+  sessionStorage.setItem(ENDED, 'Your session has ended. Please log in again.');
+  location.reload();
 });
 
 async function boot() {
@@ -182,8 +239,10 @@ async function boot() {
   if (api.isDemo) document.getElementById('demo-badge').hidden = false;
   try {
     const s = await api.authStatus();
+    const message = sessionStorage.getItem(ENDED);
+    sessionStorage.removeItem(ENDED);
     if (s.user) onLogin(s.user);
-    else showAuth(s.setupNeeded ? 'setup' : 'login');
+    else showAuth(s.setupNeeded ? 'setup' : 'login', message || undefined);
   } catch (e) {
     view.innerHTML = `<div class="notice is-error" role="alert">${ICON.alert}<div><strong>Cannot reach the server.</strong><p>${esc(e.message)}</p>
       <button class="btn" type="button" data-shell="reload">Try again</button></div></div>`;

@@ -2,8 +2,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { emptyLog, hasContent } from '../js/core/schema.js';
+import { median } from '../js/core/math.js';
 import {
-  adherence, asNeededUse, associations, bedMinutes, drinkStats, measurementStats, median, medTimeline, symptomStats, weekBlocks, wearableStats,
+  adherence, asNeededUse, associations, bedMinutes, drinkStats, measurementStats, medTimeline, symptomStats, weekBlocks, wearableStats,
 } from '../js/report/stats.js';
 import { labFlag, labTable, parseLabs, parseRange } from '../js/report/labs.js';
 
@@ -27,23 +28,24 @@ test('weekBlocks end on the last day of the period', () => {
   assert.equal(weekBlocks('2026-10-03', '2026-10-14')[0].days, 5);
 });
 
-test('adherence: only diary days while the medication is active; no tick = not taken', () => {
+test('adherence: only days where the medication part was filled in, while the medication is active', () => {
   const profile = { medications: [
     { id: 'a', name: 'Med A', since: '2026-10-03', until: '', asNeeded: false },
     { id: 'b', name: 'Med B', since: '', until: '2026-10-02', asNeeded: false },
     { id: 'p', name: 'Paracetamol', asNeeded: true },
   ] };
   const days = [
-    day('2026-10-01', l => { l.notes = 'x'; l.meds.taken.b = { done: true, time: '08:00' }; }),
-    day('2026-10-02', l => { l.notes = 'x'; }), // B not ticked → not taken
+    day('2026-10-01', l => { l.meds.taken.b = { done: true, time: '08:00' }; }),
+    day('2026-10-02', l => { l.meds.extra.push({ name: 'Ibuprofen', time: '' }); }), // medication part filled in, B not ticked → not taken
     day('2026-10-03', l => { l.meds.taken.a = { done: true, time: '21:00' }; }),
-    day('2026-10-04', l => { l.notes = 'x'; }), // A not ticked
-    day('2026-10-05', null), // no diary entry: not counted
-    day('2026-10-06', l => { l.meds.taken.a = { done: true, time: '22:00' }; }), // partial day: skipped
+    day('2026-10-04', l => { l.notes = 'x'; l.meds.taken.b = { done: false, time: '' }; }), // touched, A not ticked → not taken
+    day('2026-10-05', l => { l.drinks.water = 1; }), // only a glass of water: does not count
+    day('2026-10-06', null), // no diary entry: does not count
+    day('2026-10-07', l => { l.meds.taken.a = { done: true, time: '22:00' }; }), // partial day: skipped
   ];
-  const [a, b] = adherence(profile, days, { skip: '2026-10-06' });
+  const [a, b] = adherence(profile, days, { skip: '2026-10-07' });
   assert.deepEqual([a.taken, a.eligible, a.missed], [1, 2, ['2026-10-04']]);
-  assert.deepEqual([b.taken, b.eligible], [1, 2]);
+  assert.deepEqual([b.taken, b.eligible, b.missed], [1, 2, ['2026-10-02']]);
   assert.equal(a.usualTime, '21:00');
   assert.equal(adherence(profile, days).length, 2, 'as-needed medication is not scheduled');
 });
@@ -208,4 +210,38 @@ test('lab table: the same test across documents, side by side, oldest first', ()
   assert.deepEqual(Object.keys(chol.cells), ['2026-03-01', '2026-09-01']);
   assert.equal(chol.latest.value, 1.98);
   assert.equal(t.rows.length, 2);
+});
+
+test('two-unit lab lines: the first value is the result, the range is compared in the same unit', () => {
+  const [ldl] = parseLabs('LDL cholesterol 1.90 g/L 4.91 mmol/L (< 1.16)');
+  assert.deepEqual([ldl.test, ldl.valueText, ldl.unit, ldl.alt.valueText, ldl.alt.unit], ['LDL cholesterol', '1.90', 'g/L', '4.91', 'mmol/L']);
+  const [glu] = parseLabs('Glucose 0.95 g/L 5.27 mmol/L (0.70-1.10)');
+  assert.deepEqual([glu.test, glu.flag], ['Glucose', null], 'in range in the first unit: no false HIGH');
+  const [g2] = parseLabs('Glucose 0.95 g/L soit 5.27 mmol/L (3.9-6.1 mmol/L)');
+  assert.deepEqual([g2.flag, g2.rangeText], [null, '3.9-6.1 mmol/L'], 'range in the second unit');
+  const [g3] = parseLabs('Glucose 1.32 g/L 7.33 mmol/L (3.9-6.1 mmol/L)');
+  assert.equal(g3.flag, 'high');
+  const [x] = parseLabs('Albumine 40 g/L (35-50 mmol/L)');
+  assert.equal(x.flag, null, 'a range in another unit: no flag');
+  assert.equal(parseLabs('LDL cholesterol     1.30 g/L    (< 1.60)')[0].valueText, '1.30', 'the printed value is kept');
+  assert.equal(parseLabs('Leucocytes 6.2 10^9/L (4.0-10.0)')[0].unit, '10^9/L');
+});
+
+test('non-lab lines of a lab report are kept', async () => {
+  const { nonLabText } = await import('../js/report/labs.js');
+  const t = nonLabText('Glucose 0.95 g/L (0.70-1.10)\nAntigène HBs : POSITIF\nProtéinurie : 2+\nCommentaire : hémolyse légère');
+  assert.equal(t, 'Antigène HBs : POSITIF\nProtéinurie : 2+\nCommentaire : hémolyse légère');
+});
+
+test('weekly symptom counts: unknown (null) for weeks without a diary entry', () => {
+  const days = [day('2026-10-01', l => { l.symptoms.push(sym('Fatigue', 1)); }), day('2026-10-14', l => { l.notes = 'x'; })];
+  const [f] = symptomStats(days, { from: '2026-10-01', to: '2026-10-14' });
+  assert.deepEqual(f.weekly, [1, 0]);
+  const [g] = symptomStats([day('2026-10-01', l => { l.symptoms.push(sym('Fatigue', 1)); })], { from: '2026-09-24', to: '2026-10-14' });
+  assert.deepEqual(g.weekly, [null, 1, null], 'oldest week first');
+});
+
+test('home blood pressure: mean and number of readings', () => {
+  const ms = [{ type: 'bp', date: '2026-10-03', value: { sys: 130, dia: 80 } }, { type: 'bp', date: '2026-10-04', value: { sys: 141, dia: 91 } }];
+  assert.deepEqual(measurementStats('bp', ms, { from: '2026-10-01', to: '2026-10-14' }).mean, { sys: 136, dia: 86, n: 2 });
 });

@@ -7,6 +7,7 @@ import { flushProfile, healthActions, healthInput, healthView, loadProfile } fro
 import { loadSettings, settingsActions, settingsForms, settingsInput, settingsView } from './profile-settings.js';
 
 const VIEWS = [['health', 'My health'], ['settings', 'Settings']];
+let focusView = false;
 const viewOf = v => (VIEWS.some(x => x[0] === v) ? v : 'health');
 
 async function viewHtml(ctx, view) {
@@ -26,18 +27,21 @@ export default {
       <div id="profile-content" class="profile-content">${html}</div>`;
   },
 
+  mounted() {
+    // After a switch with the control, keep the focus on it.
+    if (focusView) document.querySelector('.profile-views [aria-pressed="true"]')?.focus();
+    focusView = false;
+  },
+
   leave() { return flushProfile(); },
 
   actions: {
     async view(el, e, ctx) {
-      const view = viewOf(el.dataset.value);
       if (el.getAttribute('aria-pressed') === 'true') return;
-      await flushProfile().catch(() => {}); // a failed save stays queued and retries
-      const html = await viewHtml(ctx, view);
+      const view = viewOf(el.dataset.value);
       store.set('profile-view', view);
-      ctx.params = { ...ctx.params, view };
-      document.querySelectorAll('.profile-views [data-act="view"]').forEach(b => b.setAttribute('aria-pressed', String(b === el)));
-      document.getElementById('profile-content').innerHTML = html;
+      focusView = true;
+      await ctx.go('profile', { view }); // the address becomes #profile or #profile/settings
     },
     ...healthActions,
     ...settingsActions,

@@ -1,0 +1,19 @@
+name: Feature request
+description: An idea to make the diary more useful.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: "**Never paste real health data in an issue.** Issues are public."
+  - type: textarea
+    id: need
+    attributes:
+      label: What do you need?
+      description: Describe the situation and what is hard today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: How could the app help? Sketches and examples are welcome.

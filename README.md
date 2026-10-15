@@ -10,16 +10,23 @@ for your doctor, or an **anonymized** version to paste into an AI assistant.
 
 ## Features
 
-- **Today:** meals with times, water, coffee and alcohol, medication checklist, what you did,
-  symptoms (mild / moderate / severe, all day, a part of the day or a time), notes, and optional
-  weight, blood pressure and temperature.
-- **Apple Health:** sleep (with stages), steps, resting heart rate, HRV, workouts and weight, sent by
-  an iPhone shortcut. Import your full history once from the Health app export.
-- **Documents:** your medical documents from Paperless-ngx (tag `medical`), with their text.
-- **Report:** profile, summary (averages, symptom patterns, medication taken), measurements,
-  document text and the daily log, in one markdown file. The AI version hides names, date of birth,
-  doctor names, contact details and ID numbers, and can replace dates with day numbers.
-- **Several users:** each person has their own private diary. Works on phone, tablet and desktop.
+- **Today:** a compact day you scan in one look. Meals with times, snacks, water, coffee and alcohol,
+  your medication checklist (with the time you took it), what you did, symptoms (mild / moderate /
+  severe; all day, a part of the day or a time), notes, and optional weight, blood pressure and
+  temperature. The **+** button logs the common things in one or two taps.
+- **Apple Health:** sleep (stages and naps), steps, resting heart rate, HRV, workouts and weight, sent
+  by an iPhone shortcut. Import your full history once from the Health app export.
+- **Trends:** weight, blood pressure (with the 140/90 line), temperature, weekly sleep, steps and heart
+  rate, and a symptom calendar. Every chart also works as a table.
+- **Records:** your medical documents from Paperless-ngx (tag `medical`), with their text.
+- **Report:** flags first (high blood pressure, fever, weight change, new symptoms, missed medication,
+  lab values out of range), then medication taken, symptom patterns, links such as "palpitations on
+  days with 3 or more coffees", trends, measurements, a lab table and a short daily log.
+  - **For your doctor:** a formatted report to print, save as PDF or share.
+  - **For an AI assistant:** anonymized markdown. Names, date of birth, addresses, contact details and
+    ID numbers are removed, and dates become day numbers (D-12).
+- **Several users:** each person has their own private diary. Light, dark or automatic theme. Works on
+  phone, tablet and desktop, and can be added to the iPhone home screen.
 
 ## Install
 
@@ -54,13 +61,13 @@ Update: `docker compose pull && docker compose up -d`. Your data in `./data` sta
 
 ## First steps for each user
 
-1. **Profile:** your details and medical history. Each line of "Regular medication" becomes a
-   checkbox on the Today screen.
-2. **Paperless:** in Profile, save your own Paperless API token. Add the tag `medical` to your
-   reports and blood tests in Paperless.
+1. **Profile → My health:** your details, medical history and medication. Scheduled medication
+   appears as a checklist on Today; "as needed" medication appears as quick buttons.
+2. **Profile → Settings → Paperless:** save your own Paperless API token. Use a Paperless user that
+   can read only your medical documents. Add the tag `medical` to your reports and blood tests.
 3. **Apple Health history:** on the iPhone, Health app → your picture → **Export All Health Data**.
-   Then in the diary: **Profile → Import your history**. The import only fills empty fields.
-4. **Daily sync:** create a shortcut key in Profile and build the shortcut:
+   Then in the diary: **Profile → Settings → Import your history**. The import only fills empty days.
+4. **Daily sync:** create a shortcut key in **Profile → Settings** and build the shortcut:
    [docs/shortcut.md](docs/shortcut.md).
 
 ## Security
@@ -69,15 +76,23 @@ This app holds health data. Please read this before you install it.
 
 - **Keep it private.** Run it on a private network (Tailscale, VPN, home LAN). Do not open it to the
   internet, and do not use Tailscale Funnel for it.
-- **Use HTTPS.** Tailscale (`*.ts.net`) and most reverse proxies do this for you. Behind a reverse
-  proxy on another host or container, set `FORWARDED_ALLOW_IPS` to its address. Only then does the
-  app read the client address and HTTPS from the proxy headers.
+- **Use HTTPS.** Tailscale (`*.ts.net`) and most reverse proxies do this for you.
+- **Proxy address (`FORWARDED_ALLOW_IPS`).** Docktail, `tailscale serve` and reverse proxies connect
+  to the app for your devices, so the app sees the proxy's address, not the device's. The app
+  reads the real address from the `X-Forwarded-For` header only when the request comes from an
+  address in `FORWARDED_ALLOW_IPS`. To find the proxy's address, open the app once and run
+  `docker logs health-diary`: each request line starts with the address that connected (for example
+  `172.18.0.5:41234`). Put that address in `.env` (`FORWARDED_ALLOW_IPS=172.18.0.5`). Never use `*`:
+  then anyone can fake their address. If you do not set it, all users share the proxy's address.
+  This is safe, but one person's wrong passwords then slow down logins of the same username for all.
 - **Accounts:** passwords are hashed with scrypt. Logins use secure, HttpOnly, SameSite cookies.
-  After 5 wrong passwords for one username from one address in 15 minutes, the app waits before it
-  accepts more tries from that address. Someone else's wrong guesses cannot lock you out.
+  After each wrong password for one username from one address, the next try must wait longer:
+  1 second, then 2, 4, 8 and so on, up to 1 minute. The app never locks an account. After 30 wrong
+  passwords from one address in 15 minutes, that address must wait.
   A new password logs out the user's other devices.
 - **First account:** only a person with the setup code from the server log can create it. The code
-  is long (more than 128 bits), and the number of tries is limited.
+  is long (more than 128 bits), and each wrong code from an address makes the next try wait longer.
+  A fixed `SETUP_CODE` must have at least 16 letters or digits, or the app does not start.
 - **Administrators:** when an administrator sets a new password for a user, the user sees a notice at
   the next login. User changes are written to the server log. The last administrator cannot be
   removed.
@@ -125,28 +140,33 @@ Each user can also download their own data as a JSON file, in Profile.
 | `PAPERLESS_URL` | | Paperless address, as the container reaches it. |
 | `PAPERLESS_PUBLIC_URL` | `PAPERLESS_URL` | Paperless address for links on your devices. |
 | `PAPERLESS_TAG` | `medical` | Default tag. Each user can change it. |
-| `PAPERLESS_TOKEN` | | Optional token for the first administrator (the oldest administrator account) only. Other users save their own. |
-| `SETUP_CODE` | random | Fixed code for the first account. |
+| `PAPERLESS_TOKEN` | | Optional Paperless token for one account. Other users save their own in Profile. |
+| `PAPERLESS_TOKEN_USER` | | The username that may use `PAPERLESS_TOKEN`. Without it, nobody uses the token. |
+| `SETUP_CODE` | random | Fixed code for the first account. At least 16 letters or digits. |
 | `SESSION_DAYS` | `30` | Days before a login expires. It renews while you use the app. |
 | `COOKIE_SECURE` | `auto` | `true` or `false` to force the Secure cookie flag. |
-| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Addresses of reverse proxies whose `X-Forwarded-*` headers the app trusts. Never `*`. |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Addresses of proxies (Docktail, `tailscale serve`, reverse proxy) whose `X-Forwarded-*` headers the app trusts. See Security. Never `*`. |
 | `MAX_IMPORT_MB` | `2048` | Largest Apple Health upload, in MB. |
 | `MAX_IMPORT_UNPACKED_MB` | `4096` | Largest size the upload may unpack to, in MB. |
 
 ## Development
 
-- `web/`: the front end. Plain HTML, CSS and JavaScript, no build step. Without a server it runs on
-  sample data (that is the demo).
-- `server/`: FastAPI and SQLite.
-- Run it: `docker compose -f docker-compose.yml up --build` after you change `image:` to `build: .`.
+- `web/`: the front end. HTML, CSS and JavaScript modules, no build step.
+  - `js/main.js` is the app shell. `js/core/` holds the shared data model (`schema.js`), dates, text
+    helpers, autosave and UI parts. `js/api/` has the server client and the demo back end.
+    `js/screens/` has one module per screen. `js/report/` builds and anonymizes the report.
+  - Without a server it runs on sample data in the browser: that is the demo. Try it with
+    `python3 -m http.server -d web`.
+- `server/`: FastAPI and SQLite. Request bodies are checked by the models in `app/models.py`.
+- Run the full app: in `docker-compose.yml`, replace `image:` with `build: .`, then `docker compose up --build`.
 - Tests:
 
   ```sh
-  pip install -r server/requirements-dev.txt
-  python -m pytest -q server/tests
+  pip install -r server/requirements-dev.txt && python -m pytest -q server/tests
+  cd web && node --test "tests/*.test.js"
   ```
 
 ## License
 
-[MIT](LICENSE). Fonts: Atkinson Hyperlegible, Bricolage Grotesque and IBM Plex Mono, under the
-SIL Open Font License (see `web/fonts/`).
+[MIT](LICENSE). Fonts: Atkinson Hyperlegible and Bricolage Grotesque, under the SIL Open Font
+License (see `web/fonts/`).

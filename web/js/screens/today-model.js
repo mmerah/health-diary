@@ -2,8 +2,8 @@
 // Summaries for collapsed rows, drink stepping, the week strip, symptom chip order,
 // hand corrections of health data, and measurement form checks. Tested in tests/today.test.js.
 import { addDays, hmToMin, isValidDate, parse } from '../core/dates.js';
-import { duration, num, plural } from '../core/format.js';
-import { DRINKS, MEALS, MEASUREMENTS, SYMPTOMS, describeWhen, mealAt, parseMeasurement, severityLabel } from '../core/schema.js';
+import { duration, fold, num } from '../core/format.js';
+import { DRINKS, MEALS, MEASUREMENTS, SYMPTOMS, describeWhen, drinkSummary, mealAt, normalizeLog, parseMeasurement, severityLabel } from '../core/schema.js';
 
 /** First words of a text, on one line, with "…" when cut. */
 export function clip(text, max = 44) {
@@ -39,12 +39,6 @@ export function stepDrink(value, delta) {
   return Math.max(0, value + delta);
 }
 
-export function drinkText(drink, value) {
-  if (value == null) return 'Not recorded';
-  if (value === 0) return 'None';
-  return plural(value, drink.one, drink.many);
-}
-
 // ---------- One-line summaries for collapsed rows. '' means "nothing logged".
 
 export function mealSummary(meal) {
@@ -58,9 +52,8 @@ export function snacksSummary(snacks) {
   return clip(list.map(s => s.text || s.time).join(', '));
 }
 
-export function drinksSummary(drinks) {
-  return DRINKS.filter(d => drinks[d.key] != null).map(d => `${d.label} ${num(drinks[d.key])}`).join(' · ');
-}
+/** "7 water · 2 coffee" (shared wording, also used by the report). */
+export const drinksSummary = drinks => drinkSummary(drinks);
 
 /** "2 of 3 taken · 1 extra". `scheduled` = activeMeds(profile, date). */
 export function medsSummary(log, scheduled) {
@@ -124,8 +117,15 @@ export function healthSource(h, todayIso) {
 
 // ---------- Which sections are open at first
 
-/** On today, open the meal that fits the time of day, if it is still empty. Other days: none. */
-export function defaultOpen(log, { isToday, now }) {
+/** All sections that can open. */
+export const SECTION_KEYS = ['health', ...MEALS.map(m => m.key), 'snacks', 'drinks', 'meds', 'activities', 'symptoms', 'notes', 'measurements'];
+
+/**
+ * Wide screens: everything open. Phone, today: the meal that fits the time of day, if it is still empty.
+ * Phone, other days: none.
+ */
+export function defaultOpen(log, { isToday, now, wide = false }) {
+  if (wide) return new Set(SECTION_KEYS);
   if (!isToday) return new Set();
   const meal = mealAt(now);
   return log.meals[meal.key].text ? new Set() : new Set([meal.key]);
@@ -141,15 +141,15 @@ export function symptomOrder(days, defaults = SYMPTOMS) {
     for (const s of (d && d.log && d.log.symptoms) || []) {
       const name = typeof s === 'string' ? s : s && s.name;
       if (!name) continue;
-      const key = name.trim().toLowerCase();
+      const key = fold(name.trim());
       if (!count.has(key)) first.set(key, { name: name.trim(), i: i++ });
       count.set(key, (count.get(key) || 0) + 1);
     }
   }
   const mine = [...count.keys()].sort((a, b) => count.get(b) - count.get(a) || first.get(a).i - first.get(b).i)
     .map(k => first.get(k).name);
-  const seen = new Set(mine.map(n => n.toLowerCase()));
-  return [...mine, ...defaults.filter(n => !seen.has(n.toLowerCase()))];
+  const seen = new Set(mine.map(fold));
+  return [...mine, ...defaults.filter(n => !seen.has(fold(n)))];
 }
 
 /** A new symptom: no severity yet. On today, "when" is the current part of the day. */
@@ -174,8 +174,37 @@ export function appendMeal(old, text) {
   return `${a.replace(/[,;.]+$/, '')}, ${b}`;
 }
 
-/** Breakfast/Lunch/Dinner keys in order, used by sections. */
-export const MEAL_KEYS = MEALS.map(m => m.key);
+/**
+ * Time to prefill for a meal. On today: now, unless the meal's usual time is more than 3 hours away
+ * (breakfast chosen at 15:00), then the usual time. Other days: the usual time.
+ */
+export function mealTime(mealKey, now, isToday) {
+  const def = MEALS.find(m => m.key === mealKey);
+  if (!isToday) return { time: def.typical, usual: true };
+  const gap = Math.abs(hmToMin(now) - hmToMin(def.typical));
+  return Math.min(gap, 1440 - gap) > 180 ? { time: def.typical, usual: true } : { time: now, usual: false };
+}
+
+/**
+ * Recent texts of a meal, for one-tap chips: yesterday's first ("Same as yesterday"), then up to
+ * 3 other distinct texts from the days before, newest first. days: [{ date, log }].
+ */
+export function recentMeals(days, mealKey, date, max = 3) {
+  const list = [...(days || [])].filter(d => d && d.log && d.date < date).sort((a, b) => b.date.localeCompare(a.date));
+  const text = d => (((d.log.meals || {})[mealKey] || {}).text || '').trim();
+  const yesterday = list.find(d => d.date === addDays(date, -1) && text(d));
+  const seen = new Set();
+  const out = [];
+  if (yesterday) { out.push({ label: 'Same as yesterday', text: text(yesterday) }); seen.add(fold(text(yesterday))); }
+  for (const d of list) {
+    const t = text(d);
+    if (!t || seen.has(fold(t))) continue;
+    seen.add(fold(t));
+    out.push({ label: clip(t, 32), text: t });
+    if (out.length >= max + (yesterday ? 1 : 0)) break;
+  }
+  return out;
+}
 
 // ---------- Health corrected by hand
 
@@ -238,3 +267,77 @@ export function checkMeasurement(type, raw) {
 
 /** Minutes since midnight, for sorting rows by time ('' last). */
 export const timeKey = hm => (hm ? hmToMin(hm) : 24 * 60);
+
+// ---------- Two devices: versions and a section-level three-way merge
+
+const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+const getAt = (o, path) => path.reduce((x, k) => (x == null ? undefined : x[k]), o);
+function setAt(o, path, v) {
+  const last = path[path.length - 1];
+  const parent = path.slice(0, -1).reduce((x, k) => x[k], o);
+  if (v === undefined) delete parent[last]; else parent[last] = structuredClone(v);
+}
+
+/** The parts of a log that merge on their own, with a name for messages. */
+export function logSections(...logs) {
+  const ids = new Set();
+  logs.forEach(l => Object.keys(l.meds.taken).forEach(id => ids.add(id)));
+  return [
+    ...MEALS.map(m => ({ path: ['meals', m.key], name: m.label })),
+    { path: ['snacks'], name: 'Snacks' },
+    ...DRINKS.map(d => ({ path: ['drinks', d.key], name: d.label })),
+    ...[...ids].sort().map(id => ({ path: ['meds', 'taken', id], name: 'Medication' })),
+    { path: ['meds', 'extra'], name: 'Other medication' },
+    { path: ['activities'], name: 'What I did' },
+    { path: ['symptoms'], name: 'Symptoms' },
+    { path: ['notes'], name: 'Notes' },
+  ];
+}
+
+/**
+ * Three-way merge. Starts from the server copy and puts back each section the user changed
+ * since `base`. When the other device changed the same section too, the user's change wins and
+ * the section name is listed in `conflicts`. All three logs are normalized.
+ */
+export function mergeLog(base, local, server) {
+  const out = structuredClone(server);
+  const conflicts = [];
+  for (const { path, name } of logSections(base, local, server)) {
+    const b = getAt(base, path), l = getAt(local, path), s = getAt(server, path);
+    if (same(l, b)) continue; // not changed here: keep the server copy
+    if (!same(s, b) && !same(s, l) && !conflicts.includes(name)) conflicts.push(name);
+    setAt(out, path, l);
+  }
+  return { log: out, conflicts };
+}
+
+/** The sections (by path) that differ between two logs. */
+export const changedSections = (a, b) => logSections(a, b).filter(x => !same(getAt(a, x.path), getAt(b, x.path))).map(x => x.path);
+
+/**
+ * Saves a log with its base version. On a conflict (409 with the newer server copy) it merges
+ * and saves again with the new version; one more conflict is retried once.
+ * save(date, log, baseVersion) → { logVersion }. base: { version, log } or null.
+ * Returns { log, version, merged, conflicts }.
+ */
+export async function saveMerging(save, date, local, base) {
+  let conflict;
+  try {
+    const r = await save(date, local, base ? base.version : undefined);
+    return { log: local, version: r ? r.logVersion : undefined, merged: false, conflicts: [] };
+  } catch (e) {
+    if (e.status !== 409 || !e.data) throw e;
+    conflict = e.data;
+  }
+  for (let attempt = 0; ; attempt++) {
+    const server = normalizeLog(conflict.log);
+    const { log, conflicts } = mergeLog(base ? base.log : server, local, server);
+    try {
+      const r = await save(date, log, conflict.logVersion);
+      return { log, version: r ? r.logVersion : conflict.logVersion, merged: true, conflicts };
+    } catch (e) {
+      if (e.status !== 409 || !e.data || attempt >= 1) throw e;
+      conflict = e.data;
+    }
+  }
+}

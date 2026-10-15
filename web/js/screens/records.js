@@ -23,8 +23,8 @@ const loadingHtml = `<div class="empty records-loading" role="status">${ICON.syn
 
 function notConfigured(ctx, cfg) {
   if (!cfg.available) {
-    return `<div class="notice">${ICON.info}<div><strong>Paperless is not set up on this server.</strong>
-      <p>Paperless keeps your scanned medical documents. The administrator of this server must set <span class="tag">PAPERLESS_URL</span>. Then you can connect your own Paperless account in Profile.</p></div></div>`;
+    return `<div class="notice">${ICON.info}<div><strong>Your documents cannot show here yet.</strong>
+      <p>Paperless keeps your scanned medical documents. Paperless is not connected. Ask the person who installed Health Diary to connect it.</p></div></div>`;
   }
   return `<div class="notice">${ICON.info}<div><strong>Connect Paperless to see your documents.</strong>
     <p>This list shows your medical documents from Paperless: all documents with your tag. Add your Paperless token in Profile → Settings.</p>
@@ -56,7 +56,7 @@ function docCard(d) {
     ${d.correspondent ? `<p class="doc-from">${esc(d.correspondent)}</p>` : ''}
     <div class="doc-actions">
       <label class="check"><input type="checkbox" data-act="include" data-id="${esc(d.id)}"${included ? ' checked' : ''}> Include in reports</label>
-      ${url ? `<a class="btn ghost small" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Open in Paperless<span class="sr-only"> (opens in a new tab)</span></a>` : ''}
+      ${url ? `<a class="btn small" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${ICON.share}Open in Paperless<span class="sr-only"> (opens in a new tab)</span></a>` : ''}
     </div>
     ${d.content ? `<details class="doc-text-box"><summary>Show text</summary><pre class="doc-text" tabindex="0">${esc(d.content)}</pre></details>` : ''}
   </article>`;
@@ -82,7 +82,7 @@ function chipsHtml() {
 }
 
 function listHtml(ctx) {
-  return `${ctx.api.isDemo ? `<div class="notice is-caution">${ICON.info}<div><p>These are sample documents. In your own install, this list comes from your Paperless.</p></div></div>` : ''}
+  return `${ctx.api.isDemo ? `<div class="notice is-caution">${ICON.info}<div><p>These are sample documents. In your own install, this list comes from your Paperless. Each document then has an “Open in Paperless” button that opens the original file.</p></div></div>` : ''}
     <div class="records-tools">
       <label class="field records-search"><span class="sr-only">Search documents</span>
         <input type="search" id="doc-search" placeholder="Search title, sender or text" autocomplete="off" value="${esc(st.query)}"></label>

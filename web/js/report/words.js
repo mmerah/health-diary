@@ -45,7 +45,7 @@ export function flagText(f, h) {
       return { area: T(s.name), text: `Severe on ${plural(dates.length, 'day')}: ${dates.slice(-5).map(D).join(', ')}${dates.length > 5 ? ' (last 5)' : ''}.` };
     }
     case 'missed-med': return { area: T(medName(f.med)),
-      text: `Taken on ${f.med.taken} of ${f.med.eligible} diary days (${pct(f.med.rate)}). A day with a diary entry and no tick counts as not taken.` };
+      text: `Taken on ${f.med.taken} of ${plural(f.med.eligible, 'day')} (${pct(f.med.rate)}). Only days where the medication part of the diary was filled in count.` };
     case 'lab': {
       const r = f.row.latest;
       return { area: T(f.row.test), text: `${labValue(r)} on ${D(f.date)}: ${r.flag === 'flagged' ? 'flagged by the lab' : r.flag}${r.rangeText ? ` (range ${r.rangeText})` : ''}.` };
@@ -53,6 +53,11 @@ export function flagText(f, h) {
     case 'lab-resolved': {
       const [date, r] = f.earlier;
       return { area: T(f.row.test), text: `Was ${r.flag === 'flagged' ? 'flagged' : r.flag} (${labValue(r)}) on ${D(date)}. Latest: ${labValue(f.row.latest)} on ${D(f.date)}, in range.` };
+    }
+    case 'association': {
+      const a = f.assoc;
+      const lab = x => (a.factor === 'coffee' ? `${x} of coffee` : a.factor === 'sleep' ? `${x} of sleep the night before` : x);
+      return { area: T(a.symptom), text: `On ${a.a.with} of ${plural(a.a.days, 'day')} with ${lab(a.aLabel)}, on ${a.b.with} of ${plural(a.b.days, 'day')} with ${lab(a.bLabel)}. This is a pattern, not a cause.` };
     }
     case 'hr-up': return { area: 'Resting heart rate', text: `Median went up from ${Math.round(f.first)} to ${Math.round(f.last)} bpm (first 4 weeks, last 4 weeks).` };
     case 'sleep-down': return { area: 'Sleep', text: `Median sleep went down from ${duration(f.first)} to ${duration(f.last)} (first 4 weeks, last 4 weeks).` };
@@ -62,11 +67,11 @@ export function flagText(f, h) {
 
 function halves(s) {
   const h = s.halves;
-  return `${plural(h.first, 'day')} of ${h.loggedFirst} diary days in the first half, ${plural(h.second, 'day')} of ${h.loggedSecond} in the second half`;
+  return `${h.first} of ${plural(h.loggedFirst, 'diary day')} in the first half, ${h.second} of ${h.loggedSecond} in the second half`;
 }
 
 export const medName = m => [m.name, m.dose].filter(Boolean).join(' ');
-export const labValue = r => `${r.cmp ? `${r.cmp} ` : ''}${String(r.value)}${r.unit ? ` ${r.unit}` : ''}`;
+export const labValue = r => `${r.cmp ? `${r.cmp} ` : ''}${r.valueText || String(r.value)}${r.unit ? ` ${r.unit}` : ''}`;
 
 // ---------- Section sentences
 
@@ -98,17 +103,12 @@ export function drinkText(d) {
   return parts.join(', ');
 }
 
-export function drinksOfDay(drinks) {
-  if (!drinks) return '';
-  return DRINKS.filter(d => drinks[d.key] != null).map(d => `${d.label.toLowerCase()} ${plural(drinks[d.key], d.one, d.many)}`).join(', ');
-}
-
 /** "6/3/0" for the compact table (water/coffee/alcohol), "–" when not recorded. */
 export const drinksShort = drinks => (drinks ? DRINKS.map(d => (drinks[d.key] == null ? '–' : drinks[d.key])).join('/') : '');
 
 export function adherenceText(m) {
   if (!m.eligible) return 'no diary days while it was active';
-  return `taken on ${m.taken} of ${m.eligible} diary days (${pct(m.rate)})${m.usualTime ? `, usually at ${m.usualTime}` : ''}`;
+  return `taken on ${m.taken} of ${plural(m.eligible, 'diary day')} (${pct(m.rate)})${m.usualTime ? `, usually at ${m.usualTime}` : ''}`;
 }
 
 export function asNeededText(m) {

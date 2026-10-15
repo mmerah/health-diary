@@ -3,21 +3,69 @@
 import { api } from '../api/index.js';
 import { createAutosave } from '../core/autosave.js';
 import { addDays, nowHm, today as todayIso } from '../core/dates.js';
+import { fold, listJoin } from '../core/format.js';
 import { activeMeds, asNeededMeds, hasContent, medLabel, normalizeLog, normalizeProfile, periodOf, SYMPTOMS } from '../core/schema.js';
-import { toast } from '../core/ui.js';
+import { session } from '../core/session.js';
+import { store, toast } from '../core/ui.js';
 import {
-  clampDate, correctHealth, defaultOpen, newSymptom, shiftWeek, stepDrink, symptomOrder, weekDays,
+  changedSections, clampDate, correctHealth, defaultOpen, mergeLog, newSymptom, saveMerging, stepDrink,
+  symptomOrder, weekDays,
 } from './today-model.js';
-import { bodyOf, emptyOf, healthSection, page, symptomChips, summaryOf, symptomItem } from './today-view.js';
+import { bodyOf, emptyOf, healthSection, page, symptomChips, summaryOf, symptomItem, weekStrip } from './today-view.js';
 
-const saver = createAutosave('log', (date, log) => api.saveLog(date, log));
+const WIDE = '(min-width: 1000px)';
+
+// ---------- Versions: each day's log has a version on the server. A save sends the version it
+// started from; if another device saved in between, saveMerging() merges section by section.
+
+const bases = new Map(); // date → { version, log } as last loaded or saved
+const baseKey = () => `log-bases-${session.uid}`;
+function loadBases() {
+  if (bases.size) return;
+  for (const [d, b] of store.get(baseKey(), [])) bases.set(d, b);
+}
+/** Keep the bases of days with unsaved edits in this browser, so a merge also works after a reload. */
+function persistBases() {
+  store.set(baseKey(), [...bases].filter(([d]) => saver.has(d) || (st && st.date === d)));
+}
+function setBase(date, version, log) {
+  bases.set(date, { version, log: structuredClone(log) });
+  persistBases();
+}
+
+async function saveDay(date, log) {
+  loadBases();
+  const base = bases.get(date) || null;
+  const r = await saveMerging((d, l, v) => api.saveLog(d, l, v), date, log, base);
+  setBase(date, r.version, r.log);
+  if (r.merged) afterMerge(date, log, r.log, r.conflicts);
+}
+
+/** Shows the merged day: sections changed here since the save keep the newest typing. */
+function afterMerge(date, sent, merged, conflicts) {
+  if (isLive(st) && st.date === date) {
+    const before = st.log;
+    st.log = mergeLog(sent, before, merged).log;
+    const rows = new Set(changedSections(before, st.log).map(path => (path[0] === 'meals' ? path[1] : path[0])));
+    rows.forEach(k => redraw(k));
+    if (rows.has('symptoms')) redrawChips();
+    if (JSON.stringify(st.log) !== JSON.stringify(merged)) saver.queue(date, st.log);
+  } else if (saver.has(date) && saver.get(date) !== sent) {
+    saver.queue(date, mergeLog(sent, saver.get(date), merged).log);
+  }
+  toast(conflicts.length
+    ? `Merged with changes from another device. Your version was kept for: ${listJoin(conflicts)}.`
+    : 'Merged with changes from another device.', { ms: 6000 });
+}
+
+const saver = createAutosave('log', saveDay);
 
 let st = null;              // state of the day on display
 const pending = new Map();  // render id → state, until mounted
 let seq = 0;
-let openMemory = { date: null, keys: new Set() }; // open sections, kept while on the same day
-let layout = null;          // desktop two-column layout (ResizeObserver)
+let openMemory = { date: null, wide: null, keys: new Set() }; // open sections, kept while on the same day
 let flashHealthNext = false; // after a sync, highlight the health row once
+let mq = null;              // the wide-screen media query, to switch layouts
 
 // ---------- Symptom chip order: the user's own symptoms of the last 60 days first. Cached per session.
 
@@ -33,27 +81,50 @@ export function loadSymptomOrder(a = api) {
 /** Quick add calls this after it logs a symptom, so the order learns it. */
 export function forgetSymptomOrder() { symptomCache = null; }
 
+/** Saves a log of another day than the one on display (Undo after a day change, quick add). */
+export async function saveOtherDay(date, change) {
+  await saver.flush();
+  loadBases();
+  const day = await api.getDay(date);
+  const pendingLog = saver.has(date) ? saver.get(date) : null;
+  const log = normalizeLog(pendingLog || day.log);
+  if (!pendingLog) setBase(date, day.logVersion, normalizeLog(day.log));
+  change(log);
+  await saveDay(date, log);
+}
+
 // ---------- Render
 
+async function weekHasOf(week) {
+  const list = await api.listDays(week[0], week[6]).catch(() => []);
+  return Object.fromEntries((list || []).map(d => [d.date, hasContent(saver.has(d.date) ? saver.get(d.date) : d.log)]));
+}
+
 async function render(ctx, params = {}) {
+  loadBases();
   const today = todayIso();
   const date = clampDate(params.date, today);
   const week = weekDays(date);
-  const [day, profile, weekList] = await Promise.all([
+  const wide = window.matchMedia(WIDE).matches;
+  const [day, profile, weekHas] = await Promise.all([
     api.getDay(date),
     api.getProfile().then(normalizeProfile).catch(e => { console.error(e); return null; }),
-    api.listDays(week[0], week[6]).catch(() => []),
+    weekHasOf(week),
   ]);
-  // A change that is not saved yet (offline) wins over the server copy.
-  const log = normalizeLog(saver.has(date) ? saver.get(date) : day.log);
-  if (openMemory.date !== date) openMemory = { date, keys: defaultOpen(log, { isToday: date === today, now: nowHm() }) };
-  const weekHas = Object.fromEntries((weekList || []).map(d => [d.date, hasContent(saver.has(d.date) ? saver.get(d.date) : d.log)]));
+  // A change that is not saved yet (offline) wins over the server copy; its base stays the one it started from.
+  const unsaved = saver.has(date);
+  const log = normalizeLog(unsaved ? saver.get(date) : day.log);
+  if (!unsaved || !bases.has(date)) setBase(date, day.logVersion, normalizeLog(day.log));
+  if (openMemory.date !== date || openMemory.wide !== wide) {
+    openMemory = { date, wide, keys: defaultOpen(log, { isToday: date === today, now: nowHm(), wide }) };
+  }
   weekHas[date] = hasContent(log);
 
   const state = {
-    id: String(++seq), ctx, date, today, isToday: date === today, week, weekHas, log,
+    id: String(++seq), ctx, date, today, isToday: date === today, week, weekHas, log, wide,
     health: day.health || null,
     profileError: !profile,
+    heightCm: profile && profile.heightCm,
     scheduled: profile ? activeMeds(profile, date) : [],
     asNeeded: profile ? asNeededMeds(profile, date) : [],
     canSync: !!(api.can && api.can.sync),
@@ -61,6 +132,7 @@ async function render(ctx, params = {}) {
     symptomNames: SYMPTOMS.slice(),
     showAllSymptoms: false,
     healthForm: false,
+    editTime: null,
     open: openMemory.keys,
   };
   pending.clear();
@@ -73,11 +145,15 @@ function mounted(ctx) {
   st = pending.get(root.dataset.today);
   pending.clear();
   st.root = root;
-  if (layout) { layout.stop(); layout = null; }
   root.addEventListener('keydown', onKeydown);
-  setupSwipe(root.querySelector('.week'));
+  root.addEventListener('focusout', onFocusout);
+  setupSwipe(root);
   sizeStages(root);
-  setupLayout(root);
+  // Phone and desktop have different DOM orders: draw again when the width crosses the line.
+  if (!mq) {
+    mq = window.matchMedia(WIDE);
+    mq.addEventListener('change', () => { if (isLive(st) && st.ctx.tab === 'today') st.ctx.refresh(); });
+  }
   loadMeasures();
   if (flashHealthNext) { flashHealthNext = false; flash(root.querySelector('.tsec-health')); }
   loadSymptomOrder().then(names => {
@@ -150,7 +226,6 @@ function redrawHealth(focusSel) {
   const fresh = tmp.firstElementChild;
   old.replaceWith(fresh);
   sizeStages(fresh);
-  if (layout) layout.watch(fresh);
   if (focusSel) { const t = fresh.querySelector(focusSel); if (t) t.focus(); }
 }
 
@@ -196,11 +271,7 @@ async function changeDay(date, fn, key) {
     redraw(key);
     return;
   }
-  await saver.flush();
-  const day = await api.getDay(date);
-  const log = normalizeLog(saver.has(date) ? saver.get(date) : day.log);
-  fn(log);
-  await api.saveLog(date, log);
+  await saveOtherDay(date, fn);
 }
 
 /** Removes item i of a list in the log, with a 5-second "Undo". */
@@ -234,44 +305,52 @@ async function loadMeasures() {
   if (st === mine && isLive(mine)) redraw('measurements');
 }
 
-// ---------- Desktop: two columns. DOM order stays the phone order; each card is placed in its
-// column with a row span from its height (a small masonry), so the columns do not share row heights.
+// ---------- Week strip: ‹ › buttons, swipe and Page Up/Down show another week without
+// leaving the day on display; a tap on a day opens it. "Last Tuesday" = 2 taps.
 
-function setupLayout(root) {
-  const grid = root.querySelector('.today-grid');
-  const mq = window.matchMedia('(min-width: 1000px)');
-  const unit = 4; // px, the grid-auto-rows value in today.css
-  const gap = 24;
-  const size = el => { el.style.gridRowEnd = `span ${Math.ceil((el.getBoundingClientRect().height + gap) / unit)}`; };
-  const ro = new ResizeObserver(entries => { if (mq.matches) entries.forEach(e => size(e.target)); });
-  const apply = () => grid.querySelectorAll(':scope > .tsec').forEach(el => {
-    if (mq.matches) size(el); else el.style.gridRowEnd = '';
-  });
-  grid.querySelectorAll(':scope > .tsec').forEach(el => ro.observe(el));
-  mq.addEventListener('change', apply);
-  apply();
-  layout = {
-    watch: el => { ro.observe(el); if (mq.matches) size(el); },
-    stop: () => { ro.disconnect(); mq.removeEventListener('change', apply); },
-  };
+async function showWeek(delta) {
+  const mine = st;
+  const anchor = addDays(mine.week[0], 7 * delta);
+  if (anchor > mine.today) return;
+  mine.week = weekDays(anchor);
+  Object.assign(mine.weekHas, await weekHasOf(mine.week));
+  mine.weekHas[mine.date] = hasContent(mine.log);
+  if (st !== mine || !isLive(mine)) return;
+  const old = mine.root.querySelector('.week');
+  const hadFocus = old.contains(document.activeElement) ? document.activeElement : null;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = weekStrip(mine);
+  old.replaceWith(tmp.firstElementChild);
+  if (hadFocus) {
+    const same = hadFocus.dataset.act === 'week' && mine.root.querySelector(`.week [data-act="week"][data-step="${hadFocus.dataset.step}"]:not(:disabled)`);
+    (same || mine.root.querySelector('.wd[tabindex="0"]')).focus();
+  }
 }
 
-// ---------- Week strip: swipe to change week, arrow keys move between days
-
 let swipedAt = 0;
-function setupSwipe(strip) {
+function setupSwipe(root) {
   let start = null;
-  strip.addEventListener('pointerdown', e => { if (e.isPrimary) start = { x: e.clientX, y: e.clientY }; });
-  strip.addEventListener('pointercancel', () => { start = null; });
-  strip.addEventListener('pointerup', e => {
+  root.addEventListener('pointerdown', e => { if (e.isPrimary && e.target.closest('.week-days')) start = { x: e.clientX, y: e.clientY }; });
+  root.addEventListener('pointercancel', () => { start = null; });
+  root.addEventListener('pointerup', e => {
     if (!start) return;
     const dx = e.clientX - start.x, dy = e.clientY - start.y;
     start = null;
     if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
     swipedAt = Date.now();
-    const target = shiftWeek(st.date, dx < 0 ? 1 : -1, st.today);
-    if (target !== st.date) goDay(st.ctx, target);
+    safely(() => showWeek(dx < 0 ? 1 : -1));
   });
+}
+
+/** A time field (medication taken) closes when focus leaves it. */
+function onFocusout(e) {
+  if (!e.target.classList.contains('med-time-input') || !isLive(st)) return;
+  const key = st.editTime;
+  setTimeout(() => {
+    if (!isLive(st) || st.editTime !== key) return;
+    st.editTime = null;
+    redraw('meds');
+  }, 0);
 }
 
 function onKeydown(e) {
@@ -300,7 +379,7 @@ function onKeydown(e) {
     if (e.key === 'End') j = days.length - 1;
     if (e.key === 'PageUp' || e.key === 'PageDown') {
       e.preventDefault();
-      goDay(st.ctx, shiftWeek(st.date, e.key === 'PageDown' ? 1 : -1, st.today));
+      safely(() => showWeek(e.key === 'PageDown' ? 1 : -1));
       return;
     }
     if (j == null || j < 0 || j >= days.length) return;
@@ -365,6 +444,11 @@ const actions = {
   },
   day(el, e, ctx) { return goDay(ctx, addDays(st.date, Number(el.dataset.step))); },
   'go-today'(el, e, ctx) { return ctx.go('today', { date: null }); },
+  week(el) { return showWeek(Number(el.dataset.step)); },
+  'edit-time'(el) {
+    st.editTime = el.dataset.key;
+    redraw('meds', '.med-time-input');
+  },
   pick(el, e, ctx) {
     if (Date.now() - swipedAt < 400) return undefined; // the tap ended a swipe
     if (el.dataset.date === st.date) return undefined;
@@ -413,7 +497,7 @@ const actions = {
   // Symptoms
   'sym-chip'(el) {
     const name = el.dataset.name;
-    const i = st.log.symptoms.findIndex(s => s.name.toLowerCase() === name.toLowerCase());
+    const i = st.log.symptoms.findIndex(s => fold(s.name) === fold(name));
     if (i < 0) return addSymptom(name);
     // Already logged: go to it instead of adding a duplicate.
     const li = st.root.querySelector(`#sym-${i}`);
@@ -512,7 +596,7 @@ const forms = {
     const name = input.value.trim();
     if (!name) { input.focus(); return; }
     input.value = '';
-    const i = st.log.symptoms.findIndex(s => s.name.toLowerCase() === name.toLowerCase());
+    const i = st.log.symptoms.findIndex(s => fold(s.name) === fold(name));
     if (i >= 0) { actions['sym-chip']({ dataset: { name } }); return; }
     addSymptom(name);
   },
@@ -570,6 +654,11 @@ function input(el) {
     case 'snack-time': l.snacks[i].time = el.value; return changed('snacks');
     case 'extra-name': l.meds.extra[i].name = el.value; return changed('meds');
     case 'extra-time': l.meds.extra[i].time = el.value; return changed('meds');
+    case 'med-time': {
+      const t = l.meds.taken[el.dataset.id];
+      if (t) t.time = el.value;
+      return changed('meds');
+    }
     case 'activities': case 'notes': l[f] = el.value; return changed(f);
     case 'sym-from': l.symptoms[i].from = el.value; return changed('symptoms');
     case 'sym-to': l.symptoms[i].to = el.value; return changed('symptoms');

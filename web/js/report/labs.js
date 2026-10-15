@@ -6,13 +6,16 @@
 // Lines like "Mean HR 72 bpm, min 48 bpm" (no range, no flag) are not read.
 
 const NUM = String.raw`\d+(?:[.,]\d+)?`;
-const UNIT = String.raw`(?:%|[a-zA-Zµμ°/][a-zA-Zµμ°/0-9.²³^*]*(?:\/[a-zA-Zµμ0-9.²³]+)*)`;
+const UNIT = String.raw`(?:(?:x\s?)?10\^?\d{1,2}\/[a-zA-Zµμ]+|%|[a-zA-Zµμ°/][a-zA-Zµμ°/0-9.²³^*]*(?:\/[a-zA-Zµμ0-9.²³]+)*)`;
 const DASH = String.raw`(?:-|–|—|à|to)`;
 const RANGE_IN = String.raw`(?:[<>≤≥]=?\s*${NUM}|${NUM}\s*${DASH}\s*${NUM})`;
 const FLAG = String.raw`(?:HIGH|LOW|High|Low|HAUT|BAS|Haut|Bas|H|L|↑|↓|\+|-|\*{1,3})`;
 
+// name, value + unit, then maybe the same value in a second unit ("4.91 mmol/L", "soit 4.91 mmol/L"),
+// then a range (with or without its unit), then a flag.
 const LINE_RE = new RegExp(String.raw`^\s*(?<name>[\p{L}][\p{L}\p{N} ()\-'’/,.]*?[\p{L}\p{N})])\s*[:.]?\s+(?<cmp>[<>]\s*)?(?<value>${NUM})\s*(?<unit>${UNIT})?`
-  + String.raw`\s*(?:\((?<range1>${RANGE_IN})\s*${UNIT}?\)|\[(?<range2>${RANGE_IN})\]|(?<range3>${RANGE_IN})(?:\s*${UNIT})?)?`
+  + String.raw`(?:\s*[,;/=]?\s*(?:soit|i\.e\.|or)?\s*(?<alt>${NUM})\s*(?<altunit>${UNIT}))?`
+  + String.raw`\s*(?:\((?<range1>${RANGE_IN})\s*(?<runit1>${UNIT})?\)|\[(?<range2>${RANGE_IN})\s*(?<runit2>${UNIT})?\]|(?<range3>${RANGE_IN})(?:\s*(?<runit3>${UNIT}))?)?`
   + String.raw`\s*(?<flag>${FLAG})?\s*(?:[,;].*)?$`, 'u');
 
 const num = s => Number(String(s).replace(',', '.'));
@@ -42,31 +45,49 @@ export function labFlag(value, range, printed) {
 
 const NOT_A_TEST = /^(?:page|date|tel|t[ée]l|fax|age|âge|sample|collected|patient|dob|born|n[ée]|file|id|ipp|recording|validated|dr|mean|min|max|average|total of|room|bed)\b/i;
 
-/** Lab results in one text: [{ test, key, value, cmp, unit, range, rangeText, flag }]. */
+const unitKey = u => String(u || '').toLowerCase().replace(/μ/g, 'µ').replace(/\s/g, '');
+// A value fits a range when it is within 3 times its limits: a sign that it is in the same unit.
+const fits = (v, r) => (r.hi == null || v <= r.hi * 3) && (r.lo == null || v >= r.lo / 3);
+
+/** Lab results in one text: [{ test, key, value, valueText, cmp, unit, alt, range, rangeText, flag, line }]. */
 export function parseLabs(text) {
   const out = [];
-  for (const raw of String(text || '').split('\n')) {
+  String(text || '').split('\n').forEach((raw, index) => {
     const line = raw.replace(/\t/g, '  ').trimEnd();
-    if (line.length > 120) continue;
+    if (line.length > 140) return;
     const m = LINE_RE.exec(line);
-    if (!m) continue;
+    if (!m) return;
     const g = m.groups;
     const name = g.name.replace(/[\s.:]+$/, '').trim();
     const rangeText = g.range1 || g.range2 || g.range3 || '';
     const range = parseRange(rangeText);
     const flagText = g.flag || '';
     // A bare "-" or "+" is only a flag when a range is printed; otherwise it is too weak a sign.
-    if (!range && !/^(HIGH|LOW|High|Low|HAUT|BAS|Haut|Bas|H|L|↑|↓|\*{1,3})$/.test(flagText)) continue;
-    if (name.length < 2 || name.length > 48 || name.split(/\s+/).length > 7 || NOT_A_TEST.test(name)) continue;
-    const value = num(g.value);
-    out.push({
-      test: name, key: labKey(name), value, cmp: (g.cmp || '').trim(), unit: (g.unit || '').trim(),
-      range, rangeText: rangeText.trim(),
-      // "< 5" is a detection limit: below it, nothing to flag unless the lab printed a flag.
-      flag: g.cmp && !flagText ? null : labFlag(value, range, flagText),
-    });
-  }
+    if (!range && !/^(HIGH|LOW|High|Low|HAUT|BAS|Haut|Bas|H|L|↑|↓|\*{1,3})$/.test(flagText)) return;
+    if (name.length < 2 || name.length > 48 || name.split(/\s+/).length > 7 || NOT_A_TEST.test(name)) return;
+    const value = num(g.value), unit = (g.unit || '').trim();
+    const alt = g.alt ? { value: num(g.alt), valueText: g.alt, unit: g.altunit.trim() } : null;
+    // Compare with the range only in the same unit. A range without a unit is in the first unit,
+    // unless only the second value fits it. When nothing fits, no flag.
+    const runit = unitKey(g.runit1 || g.runit2 || g.runit3);
+    let compared = null;
+    if (range) {
+      if (runit && runit === unitKey(unit)) compared = value;
+      else if (runit && alt && runit === unitKey(alt.unit)) compared = alt.value;
+      else if (!runit && !alt) compared = value;
+      else if (!runit && alt) compared = fits(value, range) ? value : fits(alt.value, range) ? alt.value : null;
+    }
+    // "< 5" is a detection limit: below it, nothing to flag unless the lab printed a flag.
+    const flag = g.cmp && !flagText ? null : labFlag(compared, compared == null ? null : range, flagText);
+    out.push({ test: name, key: labKey(name), value, valueText: g.value, cmp: (g.cmp || '').trim(), unit, alt, range, rangeText: [rangeText.trim(), g.runit1 || g.runit2 || g.runit3].filter(Boolean).join(' '), flag, line: index });
+  });
   return out;
+}
+
+/** The text without its lab lines: what the document says besides the values. */
+export function nonLabText(text) {
+  const labLines = new Set(parseLabs(text).map(r => r.line));
+  return String(text || '').split('\n').filter((l, i) => !labLines.has(i)).join('\n');
 }
 
 /** Same test across documents: "Vitamin D (25-OH)" = "VITAMIN D (25-OH)". */

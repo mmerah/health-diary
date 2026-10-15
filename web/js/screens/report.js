@@ -86,7 +86,13 @@ function build() {
   return { model, text: toMarkdown(model, { redactor, relative: o.relativeDates }) };
 }
 
-const tokens = text => Math.max(100, Math.round(text.length / 3.7 / 100) * 100);
+/** "About 2,800 words for the AI (about 6 pages)": words counted, a page is about 500 words. */
+function sizeText(text) {
+  const words = (text.match(/\S+/g) || []).length;
+  const rounded = words < 1000 ? Math.max(10, Math.round(words / 10) * 10) : Math.round(words / 100) * 100;
+  const pages = Math.max(1, Math.round(words / 500));
+  return `About ${num(rounded)} words for the AI (about ${pages === 1 ? '1 page' : `${pages} pages`})`;
+}
 
 // ---------- Drawing
 
@@ -110,7 +116,7 @@ function settingsHtml() {
     <div class="field">
       <span class="label" id="rp-who">Who is it for?</span>
       ${seg('audience', [['doctor', 'My doctor'], ['ai', 'An AI (anonymized)']], o.audience, 'Who is it for?')}
-      <p class="hint" id="rp-who-hint">${ai ? 'A text for an AI assistant. Names, dates of birth, addresses, ID numbers and contact details are removed.' : 'A short formatted report. You can print it, save it as a PDF or share it.'}</p>
+      <p class="hint" id="rp-who-hint">${ai ? 'A text for an AI assistant. Names, dates of birth, addresses, ID numbers and contact details are removed.' : 'A formatted report: key points first, then the details. You can print it, save it as a PDF or share it.'}</p>
     </div>
     <div class="field">
       <span class="label">Period</span>
@@ -133,7 +139,7 @@ function settingsHtml() {
           ${SECTIONS.map(s => `<label class="check"><input type="checkbox" data-inc="${esc(s.key)}" ${o.include[s.key] ? 'checked' : ''}> ${esc(s.label)}</label>`).join('')}
         </fieldset>
         <fieldset class="rp-fs"><legend class="label">Options</legend>
-          <label class="check"><input type="checkbox" data-field="fullDaily" ${o.fullDaily ? 'checked' : ''}> Full daily details (every day, with food)</label>
+          <label class="check"><input type="checkbox" data-field="fullDaily" ${o.fullDaily ? 'checked' : ''}> All days, with full details (food, medication, activity)</label>
           <label class="check rp-ai-only" ${ai ? '' : 'hidden'}><input type="checkbox" data-field="relativeDates" ${o.relativeDates ? 'checked' : ''}> Replace dates with day numbers (D-12)</label>
         </fieldset>
         <fieldset class="rp-fs"><legend class="label">Documents</legend>
@@ -177,7 +183,7 @@ function barHtml(built) {
   const disabled = built ? '' : ' disabled';
   if (S.opts.audience === 'ai') {
     return `<button type="button" class="btn primary" data-act="copy"${disabled}>${ICON.copy} Copy report</button>
-      <span class="rp-tokens" aria-live="polite">${built ? `≈${esc(num(tokens(built.text)))} tokens` : ''}</span>`;
+      <span class="rp-tokens" aria-live="polite">${built ? esc(sizeText(built.text)) : ''}</span>`;
   }
   const canShare = typeof navigator !== 'undefined' && !!navigator.share;
   return `<button type="button" class="btn primary" data-act="print"${disabled}>${ICON.print} Print / Save as PDF</button>
@@ -203,7 +209,7 @@ function paint() {
   view.querySelector('#rp-include-sum').textContent = includeSummary();
   view.querySelector('#rp-who-hint').textContent = ai
     ? 'A text for an AI assistant. Names, dates of birth, addresses, ID numbers and contact details are removed.'
-    : 'A short formatted report. You can print it, save it as a PDF or share it.';
+    : 'A formatted report: key points first, then the details. You can print it, save it as a PDF or share it.';
   view.querySelectorAll('[role="radio"][data-act]').forEach(b => {
     const key = { audience: 'audience', period: 'period', docScope: 'docScope' }[b.dataset.act];
     b.setAttribute('aria-checked', String(String(S.opts[key]) === b.dataset.value));

@@ -13,9 +13,13 @@ export const store = {
   },
 };
 
-export function clearLocalData() {
+/** At logout: remove this user's unsaved edits and the device's UI preferences.
+    Unsaved edits of other users on this device (keys ending in -<their id>) stay. */
+export function clearLocalData(uid) {
   try {
-    Object.keys(localStorage).filter(k => k.startsWith('hd-ui-')).forEach(k => localStorage.removeItem(k));
+    Object.keys(localStorage)
+      .filter(k => k.startsWith('hd-ui-') && (!k.startsWith('hd-ui-pending-') || k.endsWith(`-${uid}`)))
+      .forEach(k => localStorage.removeItem(k));
   } catch (e) { /* storage blocked */ }
 }
 

@@ -17,7 +17,7 @@
 .doc-title { font-size: 1.1rem; overflow-wrap: anywhere; }
 .doc-from { color: var(--muted); overflow-wrap: anywhere; }
 .doc-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; border-top: 1px solid var(--line); padding-top: 4px; margin-top: 4px; }
-.doc-actions .btn.ghost { margin-right: -10px; }
+.doc-actions .btn svg { width: 16px; height: 16px; }
 .doc.is-excluded .doc-title, .doc.is-excluded .doc-meta, .doc.is-excluded .doc-from { opacity: 0.6; }
 .doc-text-box > summary { color: var(--accent); font-size: 0.95rem; }
 .doc-text {

@@ -1,4 +1,5 @@
 import io
+import tracemalloc
 import zipfile
 from datetime import date
 
@@ -38,6 +39,18 @@ def test_num(raw, integer, expected):
 ])
 def test_weight_units(raw, unit, expected):
     assert parse_weight(raw, unit) == expected
+
+
+@pytest.mark.parametrize("raw, field, integer, expected", [
+    ("45,123", "hrv", False, 45.123),       # 45123 cannot be an HRV: decimal comma
+    ("62,333", "restingHr", False, 62.333),
+    ("12,345", "steps", True, 12345),       # 12.345 steps is possible but 12345 is the reading
+    ("1,234", "hrv", False, 1.234),
+    ("9 999 999", "steps", True, None),
+])
+def test_read_uses_the_plausible_reading(raw, field, integer, expected):
+    assert health.read(raw, field, integer) == expected
+    assert parse_weight("76,500") == 76.5
 
 
 # ---------- Sleep
@@ -97,6 +110,26 @@ def test_sleep_sessions_and_naps():
     r = summarize_sleep(night)
     assert (r["bed"], r["wake"], r["total"], r["awake"]) == ("23:00", "07:00", 450, 30)
     assert r["naps"] == [{"start": "14:00", "end": "14:40", "minutes": 40}] and r["inBedOnly"] is False
+
+
+def test_long_awake_time_at_night_is_not_a_nap():
+    night = [s("core", "2026-10-13T23:00+02:00", "2026-10-14T02:00+02:00"),
+             s("core", "2026-10-14T04:30+02:00", "2026-10-14T07:00+02:00")]
+    r = summarize_sleep(night)
+    assert (r["total"], r["bed"], r["wake"], r["naps"]) == (330, "23:00", "07:00", [])
+    # Same with the awake time recorded, and outside the night window (a late sleeper).
+    late = [s("core", "2026-10-14T03:00+02:00", "2026-10-14T06:00+02:00"),
+            s("awake", "2026-10-14T06:00+02:00", "2026-10-14T09:00+02:00"),
+            s("core", "2026-10-14T09:00+02:00", "2026-10-14T12:00+02:00")]
+    r = summarize_sleep(late)
+    assert (r["total"], r["awake"], r["wake"], r["naps"]) == (360, 180, "12:00", [])
+
+
+def test_a_real_nap_stays_a_nap():
+    night = [s("core", "2026-10-13T23:00+02:00", "2026-10-14T07:00+02:00"),
+             s("core", "2026-10-14T14:00+02:00", "2026-10-14T14:40+02:00")]
+    r = summarize_sleep(night)
+    assert r["total"] == 480 and r["naps"] == [{"start": "14:00", "end": "14:40", "minutes": 40}]
 
 
 def test_in_bed_only_falls_back_to_time_in_bed():
@@ -225,7 +258,7 @@ def _zip():
 
 def test_import_export_zip(c):
     r = c.post("/api/import/apple-health", files={"file": ("export.zip", _zip(), "application/zip")}).json()
-    assert r == {"days": 1, "measurements": {"weight": 1, "bp": 1}, "first": "2025-03-02", "last": "2025-03-02"}
+    assert r == {"days": 1, "measurements": {"weight": 1, "bp": 1}, "skipped": 0, "first": "2025-03-02", "last": "2025-03-02"}
     h = c.get("/api/days/2025-03-02").json()["health"]
     # Per hour, the device with the most steps; then the hours add up: 4200 + 1000 + 3000.
     assert h["steps"] == 8200
@@ -271,7 +304,42 @@ def test_import_memory_is_freed(tmp_path):
     p.write_text(EXPORT)
     health.iterparse, orig = spy, health.iterparse
     try:
-        days, _ = health._read_export(open(p, "rb"))
+        days, _, _ = health._read_export(open(p, "rb"))
     finally:
         health.iterparse = orig
     assert seen == [0] and days
+
+
+def test_broken_records_are_skipped(c):
+    xml = EXPORT.replace("2025-03-02", "2025-05-02").replace(
+        "<ActivitySummary", '<Record type="HKQuantityTypeIdentifierStepCount" value="10"/>'
+        '<Record type="HKQuantityTypeIdentifierRestingHeartRate" startDate="yesterday" endDate="x" value="60"/>'
+        '<Workout workoutActivityType="Run"/><ActivitySummary').encode()
+    r = c.post("/api/import/apple-health", files={"file": ("export.xml", xml, "text/xml")})
+    assert r.status_code == 200 and r.json()["skipped"] == 3 and r.json()["days"] == 1
+    assert c.get("/api/days/2025-05-02").json()["health"]["steps"] == 8200
+
+
+def test_junk_inside_a_record_does_not_use_memory(tmp_path):
+    """A hostile file can put millions of elements inside one record. Each one is freed when it ends."""
+    p = tmp_path / "export.xml"
+    junk = b"<a/>" * 300_000  # 1.2 MB of text, about 50 MB as kept elements
+    p.write_bytes(b'<HealthData><Record type="HKQuantityTypeIdentifierStepCount" sourceName="x" '
+                  b'startDate="2025-01-01 10:00:00 +0100" endDate="2025-01-01 10:05:00 +0100" value="5">'
+                  + junk + b"</Record></HealthData>")
+    tracemalloc.start()
+    try:
+        with open(p, "rb") as fh:
+            days, _, _ = health._read_export(fh)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert days[date(2025, 1, 1)]["steps"] == 5
+    assert peak < 5 * 1024 * 1024, peak
+
+
+def test_deep_nesting_is_refused(tmp_path):
+    p = tmp_path / "export.xml"
+    p.write_bytes(b"<HealthData>" + b"<a>" * 1000 + b"</a>" * 1000 + b"</HealthData>")
+    with pytest.raises(health.ImportRefused), open(p, "rb") as fh:
+        health._read_export(fh)

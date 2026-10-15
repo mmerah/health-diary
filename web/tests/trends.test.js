@@ -1,15 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { addDays } from '../js/core/dates.js';
-import { bmi, CELL, changeWords, inRange, median, sortByTime, symptomGrid, weeklyMedians, weeklySymptomSummary, weightChange } from '../js/screens/trends-data.js';
+import { CELL, changeWords, inRange, sortByTime, symptomGrid, trendSummary, weeklyMedians, weeklySymptomSummary, weightChange } from '../js/screens/trends-data.js';
 
 const TODAY = '2026-10-14';
-
-test('bmi needs a plausible height', () => {
-  assert.equal(bmi(77.2, 178), 24.4);
-  assert.equal(bmi(77.2, null), null);
-  assert.equal(bmi(77.2, 20), null);
-});
 
 test('range filter and weight change', () => {
   const list = sortByTime([
@@ -22,12 +16,6 @@ test('range filter and weight change', () => {
   assert.equal(c.delta, -1.3);
   assert.equal(changeWords(c, d => d), `Down 1.3 kg since ${addDays(TODAY, -60)}`);
   assert.equal(weightChange([list[0]]), null);
-});
-
-test('median', () => {
-  assert.equal(median([3, 1, 2]), 2);
-  assert.equal(median([4, 1, 2, 3]), 2.5);
-  assert.equal(median([]), null);
 });
 
 test('weeklyMedians: 8 weeks, oldest first, gaps are null', () => {
@@ -74,4 +62,26 @@ test('symptomGrid keeps at most maxRows rows', () => {
   const g = symptomGrid(days, TODAY, { maxRows: 6 });
   assert.equal(g.rows.length, 6);
   assert.equal(g.more, 1);
+});
+
+test('trendSummary: latest values, 30-day blood pressure average, recent temperature only', () => {
+  const ms = [
+    { type: 'weight', date: addDays(TODAY, -40), value: 79 }, { type: 'weight', date: addDays(TODAY, -2), value: 78 },
+    { type: 'bp', date: addDays(TODAY, -60), value: { sys: 150, dia: 95 } },
+    { type: 'bp', date: addDays(TODAY, -10), value: { sys: 120, dia: 80 } }, { type: 'bp', date: addDays(TODAY, -1), value: { sys: 131, dia: 85 } },
+    { type: 'temp', date: addDays(TODAY, -20), value: 38.2 },
+  ];
+  const days = [
+    { date: TODAY, health: { sleep: { total: 400 } }, log: { symptoms: [{ name: 'Headache' }] } },
+    { date: addDays(TODAY, -1), health: { sleep: { total: 440 } }, log: { symptoms: [] } },
+    { date: addDays(TODAY, -40), log: { symptoms: [{ name: 'Fatigue' }] } },
+  ];
+  const s = trendSummary(ms, days, TODAY, '3m');
+  assert.equal(s.weight.last.value, 78);
+  assert.equal(s.weight.change.delta, -1);
+  assert.deepEqual(s.bp.avg, { sys: 126, dia: 83 }); // 125.5 and 82.5, rounded
+  assert.equal(s.bp.n, 2);
+  assert.equal(s.temp, null); // 20 days old: not recent
+  assert.equal(s.sleep.median, 420);
+  assert.equal(s.symptomDays, 1);
 });

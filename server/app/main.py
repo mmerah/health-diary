@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.parse import quote
 from xml.etree.ElementTree import ParseError
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -62,8 +62,13 @@ async def lifespan(_app):
     db.init()
     crypto.init()
     paperless.encrypt_old_tokens()
+    paperless.check_env()
     db.purge_sessions()
-    SETUP_CODE = os.environ.get("SETUP_CODE") or auth.new_setup_code()
+    fixed = os.environ.get("SETUP_CODE", "").strip()  # "SETUP_CODE=" in .env means: not set
+    if fixed and not auth.strong_enough(fixed):
+        log.error("SETUP_CODE is too weak. Use at least 16 letters or digits, or remove it to get a random code.")
+        raise RuntimeError("SETUP_CODE is too weak.")
+    SETUP_CODE = fixed or auth.new_setup_code()
     show_setup_code()
     task = asyncio.create_task(purge_sessions_hourly())
     yield
@@ -123,8 +128,13 @@ async def security(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    ctype = response.headers.get("content-type", "")
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
+    elif ctype.startswith(("text/html", "text/javascript", "application/javascript", "text/css")):
+        # Check with the server each time (ETag makes that cheap). After an upgrade,
+        # the browser never runs old JavaScript with new HTML.
+        response.headers["Cache-Control"] = "no-cache"
     return response
 
 
@@ -185,10 +195,10 @@ def check_date(d):
 def check_password_or_429(request, user, password, message):
     """Checks the password of a logged-in user. Wrong guesses count like failed logins."""
     pair = (auth.LOGIN_USER, f"{auth.client_ip(request)}|{user['username'].lower()}")
-    auth.check_limits(pair)
+    auth.attempt(pair)
     if not auth.verify_password(password, db.get_password_hash(user["id"])):
-        auth.record(pair)
         raise HTTPException(400, message)
+    auth.succeeded(pair)
 
 
 # ---------- Accounts
@@ -203,11 +213,11 @@ def setup(request: Request, response: Response, body: models.Setup):
     """Creates the first account (administrator). Works only while there is no account."""
     if db.count_users() > 0:
         raise HTTPException(409, "This install already has an account. Log in instead.")
-    pairs = ((auth.SETUP_IP, auth.client_ip(request)), (auth.SETUP_ALL, "all"))
-    auth.check_limits(*pairs)
+    pair = (auth.SETUP_IP, auth.client_ip(request))
+    auth.attempt(pair)
     if not auth.same_setup_code(body.code, SETUP_CODE):
-        auth.record(*pairs)
         raise HTTPException(403, "Wrong setup code. Find it in the server log: docker logs health-diary")
+    auth.succeeded(pair)
     username = auth.check_username(body.username)
     auth.check_new_password(body.password, username)
     # The count is checked again in the same transaction as the insert: two setups at once make one account.
@@ -223,13 +233,12 @@ def setup(request: Request, response: Response, body: models.Setup):
 def login(request: Request, response: Response, body: models.Login):
     username = body.username.strip()
     ip = auth.client_ip(request)
-    pairs = ((auth.LOGIN_USER, f"{ip}|{username.lower()}"), (auth.LOGIN_IP, ip))
-    auth.check_limits(*pairs)
+    pairs = ((auth.LOGIN_IP, ip), (auth.LOGIN_USER, f"{ip}|{username.lower()}"))
+    auth.attempt(*pairs)  # counted before the check, so parallel guesses cannot all pass
     user = auth.authenticate(username, body.password)
     if not user:
-        auth.record(*pairs)
         raise HTTPException(401, "Wrong username or password.")
-    auth.LOGIN_USER.clear(pairs[0][1])
+    auth.succeeded(*pairs)
     auth.start_session(request, response, user["id"])
     return user
 
@@ -376,14 +385,32 @@ def delete_user(uid: int, me=Admin):
 
 # ---------- Profile and settings
 
+def base_version(value: str | None = Header(None, alias="X-Base-Version")):
+    """The version the device started from. Without it, a save is not checked (older clients)."""
+    if value is None:
+        return None
+    if not value.strip().isdigit():
+        raise HTTPException(400, "X-Base-Version must be a whole number.")
+    return int(value)
+
+
+BaseVersion = Depends(base_version)
+
+
 @app.get("/api/profile")
-def get_profile(user=User):
-    return db.get_kv(user["id"], "profile", {})
+def get_profile(response: Response, user=User):
+    profile, version = db.get_kv_version(user["id"], "profile", {})
+    response.headers["X-Version"] = str(version)
+    return profile
 
 
-@app.put("/api/profile", status_code=204)
-def put_profile(profile: models.Profile, user=User):
-    db.set_kv(user["id"], "profile", profile.model_dump(exclude_unset=True))
+@app.put("/api/profile")
+def put_profile(profile: models.Profile, base=BaseVersion, user=User):
+    try:
+        return {"version": db.set_kv(user["id"], "profile", profile.model_dump(exclude_unset=True), base)}
+    except db.Conflict as e:
+        return JSONResponse({"detail": "Your profile was changed on another device.",
+                             "profile": e.value if e.value is not None else {}, "version": e.version}, status_code=409)
 
 
 @app.get("/api/settings")
@@ -410,9 +437,14 @@ def get_day(date: str, user=User):
     return db.get_day(user["id"], check_date(date))
 
 
-@app.put("/api/days/{date}/log", status_code=204)
-def put_log(date: str, log_: models.DayLog, user=User):
-    db.save_day_part(user["id"], check_date(date), "log", log_.model_dump(by_alias=True, exclude_unset=True))
+@app.put("/api/days/{date}/log")
+def put_log(date: str, log_: models.DayLog, base=BaseVersion, user=User):
+    try:
+        version = db.save_log(user["id"], check_date(date), log_.model_dump(by_alias=True, exclude_unset=True), base)
+    except db.Conflict as e:
+        return JSONResponse({"detail": "This day was changed on another device.", "log": e.value,
+                             "logVersion": e.version}, status_code=409)
+    return {"logVersion": version}
 
 
 @app.put("/api/days/{date}/health", status_code=204)

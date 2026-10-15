@@ -3,20 +3,11 @@
 //  - A day without a diary entry is unknown: it is never counted as "no symptoms" or "not taken".
 //  - `skip` is a partial day (today) that is left out of averages.
 import { addDays, diffDays, hmToMin, minToHm } from '../core/dates.js';
+import { mean, median } from '../core/math.js';
 import { DRINKS, MEASUREMENTS, periodOf } from '../core/schema.js';
 
 // ---------- Small helpers
 
-export function median(values) {
-  const a = values.filter(v => v != null && !Number.isNaN(v)).sort((x, y) => x - y);
-  if (!a.length) return null;
-  const mid = Math.floor(a.length / 2);
-  return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
-}
-export const mean = values => {
-  const a = values.filter(v => v != null && !Number.isNaN(v));
-  return a.length ? a.reduce((s, x) => s + x, 0) / a.length : null;
-};
 export const round1 = v => (v == null ? null : Math.round(v * 10) / 10);
 
 /** Bedtime in minutes after noon of the evening before, so 23:30 and 00:30 sort the right way. */
@@ -47,13 +38,17 @@ export function weekBlocks(from, to) {
 
 const activeOn = (m, date) => (!m.since || m.since <= date) && (!m.until || m.until >= date);
 
+/** True when the medication part of the day was filled in: a tick (or untick) for any medication, or an extra one. */
+export const medsTouched = log => !!log && (Object.keys(log.meds.taken).length > 0 || log.meds.extra.length > 0);
+
 /**
- * Scheduled medication: taken on how many diary days while it was active.
- * A diary day without a tick for an active medication counts as "not taken".
+ * Scheduled medication: taken on how many days while it was active.
+ * Only days where the medication part was filled in count. On such a day, no tick for an active medication
+ * counts as "not taken". A day with only a glass of water recorded does not count.
  */
 export function adherence(profile, days, { skip } = {}) {
   return (profile.medications || []).filter(m => !m.asNeeded).map(m => {
-    const eligible = days.filter(d => d.logged && d.date !== skip && activeOn(m, d.date));
+    const eligible = days.filter(d => d.logged && medsTouched(d.log) && d.date !== skip && activeOn(m, d.date));
     const taken = eligible.filter(d => (d.log.meds.taken[m.id] || {}).done);
     const times = taken.map(d => d.log.meds.taken[m.id].time).filter(Boolean).map(hmToMin);
     return {
@@ -165,7 +160,8 @@ export function symptomStats(days, { from, to } = {}) {
       severeDates: dates.filter(x => g.dates.get(x) === 3),
       when: g.when,
       halves: { first: first.length, second: second.length, loggedFirst: halfDays[0], loggedSecond: halfDays[1], mid },
-      weekly: weeks.map(w => dates.filter(x => x >= w.start && x <= w.end).length),
+      // null: no diary entry that week (unknown), shown as "–".
+      weekly: weeks.map(w => (logged.some(d => d.date >= w.start && d.date <= w.end) ? dates.filter(x => x >= w.start && x <= w.end).length : null)),
       trend,
     };
   }).sort((a, b) => b.days - a.days || a.name.localeCompare(b.name));
@@ -286,6 +282,7 @@ export function measurementStats(type, list, { from, to }) {
     if (start && start !== end) res.change = { from: start, to: end, kg: round1(end.value - start.value), pct: (end.value - start.value) / start.value * 100 };
   }
   if (type === 'bp') {
+    res.mean = rows.length ? { sys: Math.round(mean(rows.map(m => m.value.sys))), dia: Math.round(mean(rows.map(m => m.value.dia))), n: rows.length } : null;
     res.high = rows.filter(m => m.value.sys >= 140 || m.value.dia >= 90);
     res.low = rows.filter(m => m.value.sys < 90 || m.value.dia < 60);
   }
@@ -302,3 +299,38 @@ export function measurementStats(type, list, { from, to }) {
   return res;
 }
 
+
+// ---------- Monthly summaries (long periods)
+
+/** One row per calendar month: diary days, symptom days, the most frequent symptoms, sleep, steps, coffee, alcohol. */
+export function monthlyStats(days, { skip } = {}) {
+  const months = new Map();
+  for (const d of days) {
+    const k = d.date.slice(0, 7);
+    if (!months.has(k)) months.set(k, []);
+    months.get(k).push(d);
+  }
+  return [...months].map(([month, list]) => {
+    const logged = list.filter(d => d.logged);
+    const sym = new Map();
+    for (const d of logged) {
+      for (const n of new Set(d.log.symptoms.map(x => x.name.trim().toLowerCase()))) {
+        const e = sym.get(n) || { name: d.log.symptoms.find(x => x.name.trim().toLowerCase() === n).name.trim(), days: 0 };
+        e.days++;
+        sym.set(n, e);
+      }
+    }
+    const val = f => list.filter(d => d.date !== skip).map(f).filter(v => v != null);
+    const coffee = val(d => (d.log ? d.log.drinks.coffee : null));
+    const alcohol = val(d => (d.log ? d.log.drinks.alcohol : null));
+    return {
+      month, start: list[0].date, end: list[list.length - 1].date, days: list.length, diaryDays: logged.length,
+      symptomDays: logged.filter(d => d.log.symptoms.length).length,
+      symptoms: [...sym.values()].sort((a, b) => b.days - a.days).slice(0, 3),
+      sleep: median(val(d => (d.health && d.health.sleep && !d.health.sleep.inBedOnly ? d.health.sleep.total || null : null))),
+      steps: median(val(d => (d.health ? d.health.steps || null : null))),
+      coffee: coffee.length ? mean(coffee) : null,
+      alcoholDays: alcohol.length ? alcohol.filter(v => v > 0).length : null, alcoholRecorded: alcohol.length,
+    };
+  }).filter(m => m.diaryDays || m.sleep != null || m.steps != null);
+}

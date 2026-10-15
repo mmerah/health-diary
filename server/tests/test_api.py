@@ -9,6 +9,8 @@ from app import auth, db, main
 def test_setup_needs_the_code(server):
     assert server.get("/api/auth/status").json() == {"setupNeeded": True, "user": None}
     assert server.post("/api/auth/setup", json={"code": "WRONG", "username": "anna", "password": PW}).status_code == 403
+    assert server.post("/api/auth/setup", json={"code": "WRONG", "username": "anna", "password": PW}).status_code == 429
+    auth.reset_limits()  # instead of waiting 1 s
     # 7 groups of 4 from a 31-symbol alphabet: more than 128 bits.
     groups = main.SETUP_CODE.split("-")
     assert len(groups) == 7 and all(len(g) == 4 and set(g) <= set(auth.SETUP_ALPHABET) for g in groups)
@@ -33,9 +35,15 @@ def test_index_and_config(server):
     assert "script-src 'self'" in r.headers["content-security-policy"]
     assert "worker-src 'self'" in r.headers["content-security-policy"]
     assert r.headers["x-frame-options"] == "DENY"
+    assert r.headers["cache-control"] == "no-cache" and r.headers.get("etag")
     # The route wins over a static web/config.js (the demo settings).
     r = new_client().get("/config.js")
     assert "'/api'" in r.text and r.headers["content-type"].startswith("text/javascript")
+    assert r.headers["cache-control"] == "no-cache"
+    # Unchanged files answer 304, so no-cache stays cheap.
+    etag = new_client().get("/").headers["etag"]
+    assert new_client().get("/", headers={"If-None-Match": etag}).status_code == 304
+    assert new_client().get("/api/health").headers["cache-control"] == "no-store"
 
 
 def test_everything_needs_login(c):
@@ -49,9 +57,10 @@ def test_everything_needs_login(c):
 
 
 def test_profile(c):
-    assert c.get("/api/profile").json() == {}
+    r = c.get("/api/profile")
+    assert r.json() == {} and r.headers["x-version"] == "0"
     meds = [{"id": "m1", "name": "Ibuprofen", "dose": "200 mg", "since": "2026-01-02", "until": "", "asNeeded": True}]
-    assert c.put("/api/profile", json={"name": "Test", "heightCm": 180, "medications": meds, "v": 2}).status_code == 204
+    assert c.put("/api/profile", json={"name": "Test", "heightCm": 180, "medications": meds, "v": 2}).status_code == 200
     p = c.get("/api/profile").json()
     assert p == {"name": "Test", "heightCm": 180, "medications": meds, "v": 2}
     for bad in ({"heightCm": 20}, {"dob": "2026-02-31"}, {"sex": "x"}, {"name": "x" * 201}, {"unknown": 1},
@@ -90,11 +99,42 @@ LOG = {
 
 
 def test_days(c):
-    assert c.put("/api/days/2026-10-01/log", json=LOG).status_code == 204
+    assert c.put("/api/days/2026-10-01/log", json=LOG).json() == {"logVersion": 1}
     assert c.get("/api/days/2026-10-01").json()["log"] == LOG
     assert [d["date"] for d in c.get("/api/days?from=2026-09-30&to=2026-10-02").json()] == ["2026-10-01"]
     assert c.get("/api/days/2026-13-1").status_code == 400
     assert c.get("/api/days/2026-02-30").status_code == 400
+
+
+def test_log_versions(c):
+    a = c.get("/api/days/2026-10-09").json()
+    assert a == {"date": "2026-10-09", "log": None, "health": None, "logVersion": 0}
+    # Phone and laptop both start from version 0. The phone saves first.
+    assert c.put("/api/days/2026-10-09/log", json={"notes": "phone"}, headers={"X-Base-Version": "0"}).json() == {"logVersion": 1}
+    r = c.put("/api/days/2026-10-09/log", json={"notes": "laptop"}, headers={"X-Base-Version": "0"})
+    assert r.status_code == 409
+    assert r.json() == {"detail": "This day was changed on another device.", "log": {"notes": "phone"}, "logVersion": 1}
+    assert c.put("/api/days/2026-10-09/log", json={"notes": "both"}, headers={"X-Base-Version": "1"}).json() == {"logVersion": 2}
+    # Without the header, a save is not checked.
+    assert c.put("/api/days/2026-10-09/log", json={"notes": "old client"}).json() == {"logVersion": 3}
+    assert c.put("/api/days/2026-10-09/log", json={}, headers={"X-Base-Version": "x"}).status_code == 400
+    # Health data does not change the log version.
+    c.put("/api/days/2026-10-09/health", json={"steps": 10})
+    day = c.get("/api/days/2026-10-09").json()
+    assert day["logVersion"] == 3 and day["health"]["steps"] == 10
+    assert [d["logVersion"] for d in c.get("/api/days?from=2026-10-09&to=2026-10-09").json()] == [3]
+    c.put("/api/days/2026-10-10/health", json={"steps": 10})
+    assert c.get("/api/days/2026-10-10").json()["logVersion"] == 0
+
+
+def test_profile_versions(c):
+    v = int(c.get("/api/profile").headers["x-version"])
+    assert c.put("/api/profile", json={"name": "A"}, headers={"X-Base-Version": str(v)}).json() == {"version": v + 1}
+    r = c.put("/api/profile", json={"name": "B"}, headers={"X-Base-Version": str(v)})
+    assert r.status_code == 409
+    assert r.json() == {"detail": "Your profile was changed on another device.", "profile": {"name": "A"}, "version": v + 1}
+    assert c.get("/api/profile").headers["x-version"] == str(v + 1)
+    assert c.put("/api/profile", json={"name": "C"}).json() == {"version": v + 2}
 
 
 def test_day_log_validation(c):
@@ -213,6 +253,8 @@ def test_change_password_logs_out_other_devices(c):
     c.post("/api/users", json={"username": "cleo", "password": PW})
     phone, laptop = login("cleo"), login("cleo")
     assert phone.put("/api/me/password", json={"current": "wrong", "new": "a new password"}).status_code == 400
+    assert phone.put("/api/me/password", json={"current": PW, "new": "a new password"}).status_code == 429  # wait 1 s
+    auth.reset_limits()
     assert phone.put("/api/me/password", json={"current": PW, "new": "a new password"}).status_code == 204
     assert phone.get("/api/profile").status_code == 200
     assert laptop.get("/api/profile").status_code == 401
@@ -241,6 +283,7 @@ def test_export_and_delete_my_account(c):
 
     uid = data_uid = e.get("/api/auth/status").json()["user"]["id"]
     assert e.request("DELETE", "/api/me", json={"password": "wrong"}).status_code == 400
+    auth.reset_limits()
     assert e.request("DELETE", "/api/me", json={}).status_code == 400
     r = e.request("DELETE", "/api/me", json={"password": PW})
     assert r.status_code == 204
@@ -275,7 +318,7 @@ def test_passwords_are_hashed(c):
 
 def test_migrations_set_the_version(c):
     with db.connect() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 3
+        assert con.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 4
         assert con.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert con.execute("PRAGMA secure_delete").fetchone()[0] == 1
 
@@ -294,7 +337,7 @@ def test_transaction_rolls_back(c):
     uid = c.get("/api/auth/status").json()["user"]["id"]
     try:
         with db.transaction():
-            db.save_day_part(uid, "2030-01-01", "log", {"notes": "x"})
+            db.save_log(uid, "2030-01-01", {"notes": "x"})
             raise RuntimeError
     except RuntimeError:
         pass
@@ -327,3 +370,22 @@ def test_version_1_database_moves_to_the_first_account(tmp_path, monkeypatch):
     second = db.create_user("second", auth.hash_password(PW))["id"]
     assert db.list_days(second) == []
     assert json.loads(json.dumps(db.get_user(uid)))["ingestLastUsed"] is None
+
+
+def test_version_3_database_gets_versions(tmp_path, monkeypatch):
+    """Logs and profiles saved before versions existed start at version 1."""
+    for name, value in (("DATA_DIR", tmp_path), ("DB_PATH", tmp_path / "diary.db"), ("TMP_DIR", tmp_path / "tmp")):
+        monkeypatch.setattr(db, name, value)
+    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS[:2])
+    db.init()
+    uid = db.create_user("old", auth.hash_password(PW), True)["id"]
+    with db.connect() as con:
+        con.execute("INSERT INTO days (user_id, date, log) VALUES (?, '2025-01-01', '{}')", (uid,))
+        con.execute("INSERT INTO days (user_id, date, health) VALUES (?, '2025-01-02', '{}')", (uid,))
+        con.execute("""INSERT INTO kv (user_id, key, value) VALUES (?, 'profile', '{"name": "Old"}')""", (uid,))
+    monkeypatch.undo()
+    for name, value in (("DATA_DIR", tmp_path), ("DB_PATH", tmp_path / "diary.db"), ("TMP_DIR", tmp_path / "tmp")):
+        monkeypatch.setattr(db, name, value)
+    db.init()
+    assert [d["logVersion"] for d in db.list_days(uid)] == [1, 0]
+    assert db.get_kv_version(uid, "profile", {}) == ({"name": "Old"}, 1)

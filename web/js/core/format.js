@@ -25,3 +25,6 @@ export function listJoin(items) {
   const a = items.filter(Boolean);
   return a.length < 2 ? (a[0] || '') : `${a.slice(0, -1).join(', ')} and ${a[a.length - 1]}`;
 }
+
+/** Text for matching and search: no accents, no case, normal-width letters ("Ｈélène" → "helene"). */
+export const fold = s => String(s ?? '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase();

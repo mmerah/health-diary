@@ -77,6 +77,12 @@
 .rp-note, .rp-muted { color: var(--muted); font-size: 0.875rem; }
 .rp-sub { font-weight: 700; font-size: 0.9rem; }
 .rp-block { display: block; }
+.rp-tight { gap: 2px; }
+.rp-tight > li.is-flag { color: var(--high); }
+.rp-meas > li { line-height: 1.7; }
+.rp-val.is-flag { font-weight: 700; }
+.rp-sep { color: var(--muted); }
+.rp-daily td:nth-child(4) { white-space: nowrap; }
 .rp-nowrap { white-space: nowrap; }
 .rp-mono { font-family: var(--font-data); font-size: 0.8rem; }
 .rp-syms { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
@@ -109,6 +115,7 @@
 .rp-table tr.is-before td { color: var(--muted); font-style: italic; }
 .rp-compact td:first-child { white-space: nowrap; }
 .rp-assoc { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; font-size: 0.9rem; }
+.rp-daily td.rp-notes { font-size: 0.8rem; color: var(--muted); min-width: 12em; }
 .rp-daily tr.is-symptom td:first-child { font-weight: 700; }
 .rp-lab-flag { display: inline-block; font-family: var(--font-body); font-size: 0.72rem; font-weight: 700; padding: 1px 6px; border-radius: 999px; }
 .rp-lab-flag.is-high { background: var(--high-soft); color: var(--high); }
@@ -123,6 +130,7 @@
 .rp-spark { display: inline-flex; align-items: flex-end; gap: 2px; height: 18px; vertical-align: middle; }
 .rp-sb { display: block; width: 5px; border-radius: 1px; background: var(--accent); }
 .rp-spark .rp-h0 { height: 2px; background: var(--line); }
+.rp-spark .rp-none { height: 8px; background: none; border: 1px dashed var(--line); }
 .rp-spark .rp-h1 { height: 5px; }
 .rp-spark .rp-h2 { height: 9px; }
 .rp-spark .rp-h3 { height: 13px; }

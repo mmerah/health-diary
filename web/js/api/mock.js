@@ -49,11 +49,30 @@ export class MockApi {
   }
 
   // ---------- Diary
-  async getProfile() { return clone(this.db.profile); }
-  async saveProfile(p) { this.db.profile = clone(p); this.persist(); }
+  // Versions, as on the server: one browser has no other device, so there is never a conflict.
+  async getProfile() {
+    const p = clone(this.db.profile);
+    Object.defineProperty(p, 'version', { value: this.db.profileVersion || 0, enumerable: false, writable: true });
+    return p;
+  }
+  async saveProfile(p) {
+    this.db.profile = clone(p);
+    this.db.profileVersion = (this.db.profileVersion || 0) + 1;
+    this.persist();
+    return { version: this.db.profileVersion };
+  }
 
-  async getDay(date) { return { date, log: clone(this.db.days[date] || null), health: clone(this.db.health[date] || null) }; }
-  async saveLog(date, log) { this.db.days[date] = clone(log); this.persist(); }
+  async getDay(date) {
+    return { date, log: clone(this.db.days[date] || null), health: clone(this.db.health[date] || null),
+      logVersion: (this.db.logVersions || {})[date] || 0 };
+  }
+  async saveLog(date, log) {
+    this.db.days[date] = clone(log);
+    this.db.logVersions = this.db.logVersions || {};
+    this.db.logVersions[date] = (this.db.logVersions[date] || 0) + 1;
+    this.persist();
+    return { logVersion: this.db.logVersions[date] };
+  }
   async saveHealth(date, h) { this.db.health[date] = clone(h); this.persist(); }
   async listDays(from, to) {
     const dates = new Set([...Object.keys(this.db.days), ...Object.keys(this.db.health)]);

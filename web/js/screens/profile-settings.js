@@ -3,7 +3,8 @@
 import { esc, num, plural } from '../core/format.js';
 import { fullLabel, isValidDate } from '../core/dates.js';
 import { confirmTwice, copyText, ICON, toast } from '../core/ui.js';
-import { dateTimeLabel, MIN_PASSWORD, newPasswordError, passwordHint } from './profile-account.js';
+import { busy, clearErrors, errorBox, pwField, showError, togglePassword, updatePwHint } from './form-fields.js';
+import { dateTimeLabel, newPasswordError } from './profile-account.js';
 
 const DOCS_URL = 'https://github.com/mmerah/health-diary/blob/main/docs/shortcut.md';
 let S = null; // { settings, paperless, users }
@@ -25,13 +26,6 @@ export async function loadSettings(ctx) {
 const card = (id, title, body, extra = '') => `<section class="card form-card settings-card${extra}" id="${id}" aria-labelledby="${id}-title">
   <h2 id="${id}-title">${esc(title)}</h2>${body}</section>`;
 const why = text => `<p class="hint why">${ICON.info}<span>${esc(text)}</span></p>`;
-const formError = id => `<p class="field-error" id="${id}" role="alert"></p>`;
-
-function pwField(id, label, autocomplete, { hint = false } = {}) {
-  return `<div class="field"><label class="label" for="${id}">${esc(label)}</label>
-    <input id="${id}" name="${id}" type="password" autocomplete="${autocomplete}" required${autocomplete === 'new-password' ? ` minlength="${MIN_PASSWORD}"` : ''}${hint ? ` aria-describedby="${id}-hint"` : ''}>
-    ${hint ? `<p class="hint pw-hint" id="${id}-hint" data-level="empty">${esc(passwordHint('').text)}</p>` : ''}</div>`;
-}
 
 function lastSyncText(s) {
   if (!s) return 'No data yet';
@@ -76,7 +70,7 @@ function appleCard(ctx) {
         <div class="copy-row"><code class="tag" id="ingest-url">${esc(addr)}</code>
         <button type="button" class="btn small" data-act="copy-url" aria-label="Copy shortcut address">${ICON.copy}Copy</button></div></div>
       <div id="key-section" class="stack">${keySection(user)}</div>
-      <p><a href="${DOCS_URL}" target="_blank" rel="noopener noreferrer">Set-up steps: docs/shortcut.md on GitHub<span class="sr-only"> (opens in a new tab)</span></a></p>`;
+      <p><a href="${DOCS_URL}" target="_blank" rel="noopener noreferrer">How to set up the shortcut<span class="sr-only"> (opens in a new tab)</span></a></p>`;
   const imp = api.can.import
     ? `<form class="stack" data-form="import">
         <div class="field"><label class="label" for="imp-file">Apple Health export file</label>
@@ -102,7 +96,10 @@ function paperlessCard(ctx) {
   if (api.isDemo || !api.can.paperless || !pl) {
     body = why('Paperless needs your own server. The demo shows sample documents in Records.');
   } else if (!pl.available) {
-    body = `<p class="hint">Paperless keeps your scanned medical documents. It is not set up on this server. The administrator must set <span class="tag">PAPERLESS_URL</span>.</p>`;
+    body = `<p>Paperless is not connected. Ask the person who installed Health Diary to connect it.</p>
+      <p class="hint">Paperless keeps your scanned medical documents. When it is connected, they appear in Records.</p>
+      <details class="settings-more admin-detail"><summary>For the administrator</summary>
+        <p class="hint">Set <span class="tag">PAPERLESS_URL</span> on the server, then restart Health Diary.</p></details>`;
   } else {
     const ph = pl.hasToken ? (pl.tokenFromServer ? 'Set by the server. Type a token to replace it.' : 'Saved. Type a new token to replace it.') : 'Paste your API token';
     body = `<p class="hint">Records shows your documents from Paperless that have your tag. Use a separate Paperless user for the diary. Give this user read access to your medical documents only. Then, in Paperless, open the profile of this user and create an <strong>API Auth Token</strong>.</p>
@@ -113,7 +110,7 @@ function paperlessCard(ctx) {
         <div class="field"><label class="label" for="pl-tag">Tag</label>
           <input id="pl-tag" name="tag" type="text" autocomplete="off" maxlength="100" value="${esc(pl.tag || '')}" aria-describedby="pl-tag-hint">
           <p class="hint" id="pl-tag-hint">Records shows the documents that have this tag.</p></div>
-        ${formError('pl-error')}
+        ${errorBox('pl-error')}
         <div class="btn-row"><button type="submit" class="btn primary">Save</button>
           <button type="button" class="btn" data-act="pl-test">Test connection</button>
           ${pl.hasToken && !pl.tokenFromServer ? '<button type="button" class="btn ghost" data-act="pl-remove">Remove token</button>' : ''}</div>
@@ -148,7 +145,7 @@ function accountCard(ctx) {
         ${pwField('pw-cur', 'Current password', 'current-password')}
         ${pwField('pw-new', 'New password', 'new-password', { hint: true })}
         ${pwField('pw-new2', 'New password again', 'new-password')}
-        ${formError('pw-error')}
+        ${errorBox('pw-error')}
         <p class="hint">Your other devices are logged out after the change.</p>
         <div class="btn-row"><button type="submit" class="btn primary">Change password</button></div>
       </form>
@@ -162,7 +159,7 @@ function accountCard(ctx) {
         <p>This deletes your account and your whole diary from this server: days, measurements, profile and settings. <strong>You cannot undo this.</strong></p>
         <p class="hint">Backups of the server can still contain your data for some time. Export your data first if you want to keep it.</p>
         ${pwField('del-pw', 'Your password', 'current-password')}
-        ${formError('del-error')}
+        ${errorBox('del-error')}
         <div class="btn-row"><button type="submit" class="btn danger">Delete my account</button></div>
       </form>
     </details>`);
@@ -170,19 +167,23 @@ function accountCard(ctx) {
 
 export function usersList(ctx) {
   const me = ctx.user;
+  const admins = S.users.filter(u => u.isAdmin).length;
   return `<ul class="rows users">${S.users.map(u => {
     const self = u.id === me.id;
+    // The server refuses to remove the last administrator: do not offer it.
+    const lastAdmin = u.isAdmin && admins <= 1;
     return `<li class="user-row">
       <div class="user-top"><span class="grow"><strong>${esc(u.username)}</strong>${self ? ' <span class="muted">(you)</span>' : ''}</span>
         ${u.isAdmin ? '<span class="pill info">Admin</span>' : ''}</div>
       <div class="btn-row user-actions">
         <button type="button" class="btn small" data-act="user-pw" data-id="${esc(u.id)}" aria-expanded="false" aria-controls="upw-${esc(u.id)}">New password</button>
-        <button type="button" class="btn small" data-act="user-admin" data-id="${esc(u.id)}">${u.isAdmin ? 'Remove administrator' : 'Make administrator'}</button>
+        ${lastAdmin ? '' : `<button type="button" class="btn small" data-act="user-admin" data-id="${esc(u.id)}">${u.isAdmin ? 'Remove administrator' : 'Make administrator'}</button>`}
         ${self ? '' : `<button type="button" class="btn small danger" data-act="user-del" data-id="${esc(u.id)}" aria-label="Delete ${esc(u.username)} and all data">Delete</button>`}
       </div>
+      ${lastAdmin ? '<p class="hint">This is the only administrator. To remove this role, make another user an administrator first.</p>' : ''}
       <form class="stack user-pw-form" id="upw-${esc(u.id)}" data-form="user-pw" data-id="${esc(u.id)}" novalidate hidden>
         ${pwField(`upw-in-${esc(u.id)}`, `New password for ${u.username}`, 'new-password')}
-        ${formError(`upw-err-${esc(u.id)}`)}
+        ${errorBox(`upw-err-${esc(u.id)}`)}
         <div class="btn-row"><button type="submit" class="btn primary small">Save password</button></div>
       </form>
     </li>`;
@@ -203,7 +204,7 @@ function usersCard(ctx) {
         ${pwField('nu-pw', 'Password', 'new-password', { hint: true })}
       </div>
       <label class="check"><input type="checkbox" name="isAdmin" id="nu-admin"> Administrator (can manage users)</label>
-      ${formError('nu-error')}
+      ${errorBox('nu-error')}
       <div class="btn-row"><button type="submit" class="btn primary">Add user</button></div>
     </form>
     <p class="hint">Give the password to the new user in person. They can change it in Profile → Settings.</p>`);
@@ -214,28 +215,13 @@ export function settingsView(ctx) {
   const showUsers = api.can.accounts && ctx.user && ctx.user.isAdmin && S.users;
   return `${api.isDemo ? demoCard() : ''}
     <div class="profile-grid">
-      <div class="profile-col">${appleCard(ctx)}${paperlessCard(ctx)}</div>
-      <div class="profile-col">${displayCard(ctx)}${accountCard(ctx)}${showUsers ? usersCard(ctx) : ''}</div>
+      <div class="profile-col">${displayCard(ctx)}${appleCard(ctx)}${paperlessCard(ctx)}</div>
+      <div class="profile-col">${accountCard(ctx)}${showUsers ? usersCard(ctx) : ''}</div>
     </div>`;
 }
 
 // ---------- Helpers for handlers
 
-function showError(id, msg, field) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = msg;
-  if (field) { field.setAttribute('aria-invalid', 'true'); field.focus(); }
-}
-function clearErrors(form) {
-  form.querySelectorAll('.field-error').forEach(x => { x.textContent = ''; });
-  form.querySelectorAll('[aria-invalid]').forEach(x => x.removeAttribute('aria-invalid'));
-}
-/** Runs fn with the submit button disabled. */
-async function busy(form, fn) {
-  const btn = form.querySelector('[type="submit"]');
-  if (btn) btn.disabled = true;
-  try { return await fn(); } finally { if (btn && btn.isConnected) btn.disabled = false; }
-}
 async function redrawUsers(ctx) {
   S.users = await ctx.api.listUsers();
   const el = document.getElementById('users-list');
@@ -246,6 +232,8 @@ const userById = id => (S.users || []).find(u => String(u.id) === String(id));
 // ---------- Handlers
 
 export const settingsActions = {
+  'pw-show'(el) { togglePassword(el); },
+
   theme(el, e, ctx) { ctx.setTheme(el.dataset.value); },
 
   async 'demo-reset'(el, e, ctx) {
@@ -418,7 +406,7 @@ export const settingsForms = {
     if (!confirmTwice(btn, 'Tap again: delete everything')) return;
     await busy(form, async () => {
       try { await ctx.api.deleteMe(pw); } catch (x) { return showError('del-error', x.message); }
-      await ctx.logout('Your account and your diary are deleted.');
+      await ctx.logout('Your account and your diary are deleted.', { deleted: true });
     });
   },
 
@@ -454,14 +442,6 @@ export const settingsForms = {
     });
   },
 };
-
-function updatePwHint(input, username) {
-  const hint = document.getElementById(`${input.id}-hint`);
-  if (!hint) return;
-  const h = passwordHint(input.value, username);
-  hint.textContent = h.text;
-  hint.dataset.level = h.level;
-}
 
 /** Live password hints. Returns true when it handled the event. */
 export function settingsInput(el, e, ctx) {

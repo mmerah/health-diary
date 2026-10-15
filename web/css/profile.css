@@ -1,7 +1,8 @@
 /* Profile screen (js/screens/profile*.js) and the login / first-setup screen (js/screens/auth.js). */
 
 /* ---------- Layout */
-.profile-views { align-self: flex-start; min-width: min(100%, 320px); }
+.profile-views { align-self: stretch; }
+@media (min-width: 1000px) { .profile-views { align-self: flex-start; min-width: 360px; } }
 .profile-views button { min-height: 44px; font-size: 0.95rem; }
 .profile-content { display: flex; flex-direction: column; gap: var(--gap-in); }
 .profile-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--gap-in); align-items: start; }
@@ -46,6 +47,7 @@
 .secret-box { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: var(--r-sm); background: var(--accent-soft); }
 .secret { display: block; font-family: var(--font-data); font-size: 0.9rem; padding: 10px 12px; border-radius: 8px; background: var(--surface); overflow-wrap: anywhere; user-select: all; }
 .settings-more > summary { color: var(--accent); }
+.admin-detail > summary { font-size: 0.875rem; color: var(--muted); }
 .settings-more[open] > summary { margin-bottom: 8px; }
 .danger-zone > summary { color: var(--high); }
 .danger-zone[open] { padding: 0 14px 14px; border-radius: var(--r-sm); background: var(--high-soft); }
@@ -86,3 +88,7 @@ body.is-auth .view { min-height: calc(100vh - 140px); justify-content: center; }
 .auth-foot { text-align: center; color: var(--muted); font-size: 0.875rem; }
 .code-input { font-family: var(--font-data); letter-spacing: 0.04em; text-transform: uppercase; }
 .code-input::placeholder { text-transform: none; letter-spacing: 0; }
+
+/* Inline errors (form-fields.js): icon and words */
+.field-error { display: flex; gap: 6px; align-items: flex-start; }
+.field-error svg { width: 16px; height: 16px; flex: none; margin-top: 2px; }

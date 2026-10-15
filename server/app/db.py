@@ -139,8 +139,16 @@ def _v3_user_fields(c):
     c.execute("ALTER TABLE users ADD COLUMN notice TEXT")
 
 
+def _v4_versions(c):
+    # Each save of a day log or of a kv value (profile) adds 1. A device sends the version it
+    # started from; if another device saved in between, the server refuses (no lost update).
+    c.execute("ALTER TABLE days ADD COLUMN log_version INTEGER NOT NULL DEFAULT 0")
+    c.execute("UPDATE days SET log_version = 1 WHERE log IS NOT NULL")
+    c.execute("ALTER TABLE kv ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
+
+
 # In order. Each step runs in its own transaction and sets user_version to its number.
-MIGRATIONS = [(2, _v2_accounts), (3, _v3_user_fields)]
+MIGRATIONS = [(2, _v2_accounts), (3, _v3_user_fields), (4, _v4_versions)]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
@@ -171,8 +179,8 @@ def _adopt_legacy(c, uid):
     if "legacy_kv" in names:
         c.execute("INSERT OR IGNORE INTO kv (user_id, key, value) SELECT ?, key, value FROM legacy_kv", (uid,))
     if "legacy_days" in names:
-        c.execute("INSERT OR IGNORE INTO days (user_id, date, log, health, updated_at) "
-                  "SELECT ?, date, log, health, updated_at FROM legacy_days", (uid,))
+        c.execute("INSERT OR IGNORE INTO days (user_id, date, log, health, updated_at, log_version) "
+                  "SELECT ?, date, log, health, updated_at, log IS NOT NULL FROM legacy_days", (uid,))
     if "legacy_measurements" in names:
         c.execute("INSERT OR IGNORE INTO measurements (user_id, type, date, time, value, source, external_id, created_at) "
                   "SELECT ?, type, date, time, value, source, external_id, created_at FROM legacy_measurements", (uid,))
@@ -198,6 +206,14 @@ def scrub():
 
 class LastAdmin(Exception):
     """The change would leave the install without an administrator."""
+
+
+class Conflict(Exception):
+    """Another device saved first. Holds what is stored now."""
+
+    def __init__(self, value, version):
+        super().__init__("version conflict")
+        self.value, self.version = value, version
 
 
 def _user(row):
@@ -246,12 +262,6 @@ def get_password_hash(uid):
 def list_users():
     with connect() as c:
         return [_user(r) for r in c.execute("SELECT * FROM users ORDER BY id")]
-
-
-def first_admin_id():
-    with connect() as c:
-        row = c.execute("SELECT MIN(id) FROM users WHERE is_admin = 1").fetchone()
-    return row[0]
 
 
 def set_password(uid, password_hash, notice=None):
@@ -351,15 +361,27 @@ def delete_sessions(uid, keep=None):
 # ---------- Key/value (profile, settings, Paperless)
 
 def get_kv(uid, key, default):
-    with connect() as c:
-        row = c.execute("SELECT value FROM kv WHERE user_id = ? AND key = ?", (uid, key)).fetchone()
-    return _load(row["value"]) if row else default
+    return get_kv_version(uid, key, default)[0]
 
 
-def set_kv(uid, key, value):
+def get_kv_version(uid, key, default):
+    """Returns (value, version). Version 0: never saved."""
     with connect() as c:
-        c.execute("""INSERT INTO kv (user_id, key, value) VALUES (?, ?, ?)
-                     ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value""", (uid, key, json.dumps(value)))
+        row = c.execute("SELECT value, version FROM kv WHERE user_id = ? AND key = ?", (uid, key)).fetchone()
+    return (_load(row["value"]), row["version"]) if row else (default, 0)
+
+
+def set_kv(uid, key, value, base=None):
+    """Saves and returns the new version. With `base`, refuses (Conflict) if the stored version differs."""
+    with transaction() as c:
+        if base is not None:
+            current, version = get_kv_version(uid, key, None)
+            if version != base:
+                raise Conflict(current, version)
+        c.execute("""INSERT INTO kv (user_id, key, value, version) VALUES (?, ?, ?, 1)
+                     ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, version = version + 1""",
+                  (uid, key, json.dumps(value)))
+        return c.execute("SELECT version FROM kv WHERE user_id = ? AND key = ?", (uid, key)).fetchone()[0]
 
 
 def update_kv(uid, key, changes):
@@ -379,17 +401,18 @@ def all_kv(key):
 # ---------- Days
 
 def _day(r):
-    return {"date": r["date"], "log": _load(r["log"]), "health": _load(r["health"])}
+    return {"date": r["date"], "log": _load(r["log"]), "health": _load(r["health"]), "logVersion": r["log_version"]}
 
 
 def get_day(uid, date):
     with connect() as c:
-        row = c.execute("SELECT log, health FROM days WHERE user_id = ? AND date = ?", (uid, date)).fetchone()
-    return {"date": date, "log": _load(row["log"]) if row else None, "health": _load(row["health"]) if row else None}
+        row = c.execute("SELECT date, log, health, log_version FROM days WHERE user_id = ? AND date = ?",
+                        (uid, date)).fetchone()
+    return _day(row) if row else {"date": date, "log": None, "health": None, "logVersion": 0}
 
 
 def list_days(uid, date_from=None, date_to=None):
-    sql, args = "SELECT date, log, health FROM days WHERE user_id = ?", [uid]
+    sql, args = "SELECT date, log, health, log_version FROM days WHERE user_id = ?", [uid]
     if date_from:
         sql += " AND date >= ?"
         args.append(date_from)
@@ -400,13 +423,26 @@ def list_days(uid, date_from=None, date_to=None):
         return [_day(r) for r in c.execute(sql + " ORDER BY date", args)]
 
 
+def save_log(uid, date, log, base=None):
+    """Saves a day log and returns its new version. With `base`, refuses (Conflict) if the stored
+    version differs. Health data (sync, import) has no version: it never conflicts with the log."""
+    with transaction() as c:
+        day = get_day(uid, date)
+        if base is not None and base != day["logVersion"]:
+            raise Conflict(day["log"], day["logVersion"])
+        c.execute("""INSERT INTO days (user_id, date, log, log_version) VALUES (?, ?, ?, 1)
+                     ON CONFLICT(user_id, date) DO UPDATE SET log = excluded.log, log_version = log_version + 1,
+                     updated_at = datetime('now')""", (uid, date, json.dumps(log)))
+        return day["logVersion"] + 1
+
+
 def save_day_part(uid, date, part, value):
     save_days_part(uid, part, [(date, value)])
 
 
 def save_days_part(uid, part, rows):
-    """rows: [(date, value)]. One statement for many days (the history import)."""
-    assert part in ("log", "health")
+    """rows: [(date, value)]. One statement for many days (the history import). Not for logs: see save_log."""
+    assert part == "health"
     with connect() as c:
         c.executemany(f"""INSERT INTO days (user_id, date, {part}) VALUES (?, ?, ?)
                           ON CONFLICT(user_id, date) DO UPDATE SET {part} = excluded.{part}, updated_at = datetime('now')""",

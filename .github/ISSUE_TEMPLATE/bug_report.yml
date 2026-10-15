@@ -1,0 +1,39 @@
+name: Bug report
+description: Something does not work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never paste real health data in an issue.** Issues are public. Replace names, dates,
+        values and document text with invented examples, and crop screenshots.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Today
+        2. Tap …
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Open /api/health on your install, or give the image tag.
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      options: [iPhone, Android, Tablet, Desktop browser, Server or Docker, iPhone shortcut]
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server log (optional)
+      description: "Output of `docker logs health-diary`. Remove any personal data first."
+      render: text

@@ -1,5 +1,6 @@
 import io
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import pytest
@@ -28,7 +29,7 @@ def test_cross_site_and_same_site_requests_are_refused(c):
         r = c.put("/api/profile", json={"name": "x"}, headers={"Sec-Fetch-Site": site})
         assert r.status_code == 403, site
     for site in ("same-origin", "none"):
-        assert c.put("/api/profile", json={"name": "x"}, headers={"Sec-Fetch-Site": site}).status_code == 204
+        assert c.put("/api/profile", json={"name": "x"}, headers={"Sec-Fetch-Site": site}).status_code == 200
 
 
 def test_without_sec_fetch_site_the_app_header_is_needed(c):
@@ -47,16 +48,50 @@ def test_shortcut_route_needs_no_app_header(c):
 
 # ---------- Password guessing
 
-def test_password_guessing_is_blocked(c):
+class Clock:
+    """A fake time.monotonic for the rate limits."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    clk = Clock()
+    monkeypatch.setattr(auth.time, "monotonic", clk)
+    return clk
+
+
+def test_each_failure_doubles_the_wait(c, clock):
     x = new_client()
-    assert fail_login(x, "anna", auth.LOGIN_USER.limit) == [401] * auth.LOGIN_USER.limit
-    r = x.post("/api/auth/login", json={"username": "anna", "password": PW})
-    assert r.status_code == 429 and "Retry-After" in r.headers
+    waits = []
+    for _ in range(9):
+        assert x.post("/api/auth/login", json={"username": "anna", "password": "nope"}).status_code == 401
+        r = x.post("/api/auth/login", json={"username": "anna", "password": PW})
+        assert r.status_code == 429
+        waits.append(int(r.headers["Retry-After"]))
+        clock.now += waits[-1]
+    assert waits == [2, 3, 5, 9, 17, 33, 61, 61, 61]  # 1, 2, 4 ... 60 s, rounded up
+    # After the wait, the right password works and the count starts over.
+    assert x.post("/api/auth/login", json={"username": "anna", "password": PW}).status_code == 200
+    assert fail_login(x, "anna", 1) == [401]
+
+
+def test_parallel_guesses_are_counted(c):
+    def guess(i):
+        return new_client(client=("203.0.113.40", 6000 + i)).post(
+            "/api/auth/login", json={"username": "anna", "password": "nope"}).status_code
+    with ThreadPoolExecutor(max_workers=40) as pool:
+        codes = list(pool.map(guess, range(40)))
+    assert codes.count(401) == 1 and codes.count(429) == 39
 
 
 def test_lockout_is_per_address_and_username(c):
     attacker = new_client(client=("203.0.113.9", 5000))
-    fail_login(attacker, "anna", auth.LOGIN_USER.limit)
+    fail_login(attacker, "anna", 1)
     assert attacker.post("/api/auth/login", json={"username": "anna", "password": PW}).status_code == 429
     # Anna, from her own address, can still log in.
     login("anna", client=("198.51.100.7", 5000))
@@ -71,14 +106,23 @@ def test_per_address_soft_limit(c):
     assert codes[-1] == 429 and codes[:-1] == [401] * auth.LOGIN_IP.limit
 
 
+def test_a_refused_try_is_not_counted(c, clock):
+    """When the per-address limit refuses, the username backoff does not grow."""
+    x = new_client(client=("203.0.113.12", 5000))
+    for i in range(auth.LOGIN_IP.limit):
+        x.post("/api/auth/login", json={"username": f"u{i}", "password": "x"})
+    assert x.post("/api/auth/login", json={"username": "anna", "password": "x"}).status_code == 429
+    assert "203.0.113.12|anna" not in auth.LOGIN_USER._state
+
+
 def test_spoofed_x_forwarded_for_is_ignored(c):
     # Uvicorn (as in the image) trusts X-Forwarded-For only from FORWARDED_ALLOW_IPS, default 127.0.0.1.
     proxied = TestClient(ProxyHeadersMiddleware(main.app, trusted_hosts="127.0.0.1"),
                          headers={"X-Requested-With": "health-diary"}, client=("203.0.113.11", 5000))
     codes = [proxied.post("/api/auth/login", json={"username": "anna", "password": "nope"},
                           headers={"X-Forwarded-For": f"10.0.0.{i}", "X-Forwarded-Proto": "https"}).status_code
-             for i in range(auth.LOGIN_USER.limit + 1)]
-    assert codes[-1] == 429
+             for i in range(3)]
+    assert codes == [401, 429, 429]  # a new X-Forwarded-For each time does not reset the wait
     # A trusted proxy's header is used.
     trusted = TestClient(ProxyHeadersMiddleware(main.app, trusted_hosts="127.0.0.1"),
                          headers={"X-Requested-With": "health-diary"}, client=("127.0.0.1", 5000))
@@ -99,13 +143,15 @@ def test_secure_cookie_ignores_untrusted_forwarded_proto(monkeypatch):
     assert auth._is_https(req("health-diary.tail1234.ts.net")) is True
 
 
-def test_limiter_table_is_pruned():
-    lim = auth.Limiter(3, 60, max_keys=100)
+def test_limit_tables_are_pruned(clock):
+    lim, back = auth.Limiter(3, 60, max_keys=100), auth.Backoff(max_keys=100)
     for i in range(1000):
-        lim.hit(f"k{i}")
-    assert len(lim._hits) == 100
-    lim.window = -1  # everything is old
-    assert lim.wait("k999") == 0 and "k999" not in lim._hits
+        lim.reserve(f"k{i}")
+        back.reserve(f"k{i}")
+    assert len(lim._hits) == 100 and len(back._state) == 100
+    clock.now += 3600  # everything is old
+    assert lim.reserve("k999") == 0 and len(lim._hits["k999"]) == 1
+    assert back.reserve("k999") == 0 and back._state["k999"][0] == 1
 
 
 # ---------- Request size
@@ -222,14 +268,24 @@ def test_wrong_key_does_not_crash(c, monkeypatch):
     assert crypto.decrypt(blob) == "abc"
 
 
-def test_env_token_is_for_the_first_admin_only(c, monkeypatch):
+def test_env_token_is_for_the_named_user_only(c, monkeypatch, caplog):
     monkeypatch.setattr(paperless, "ENV_TOKEN", "from-env")
     anna = c.get("/api/auth/status").json()["user"]["id"]
     db.set_kv(anna, "paperless", {})
-    assert paperless.user_config(anna) == ("from-env", "medical", True)
-    c.post("/api/users", json={"username": "fred", "password": PW})
-    fred = login("fred")
-    assert fred.get("/api/me/paperless").json()["hasToken"] is False
+    # Without PAPERLESS_TOKEN_USER, nobody uses it, and the log says so.
+    monkeypatch.setattr(paperless, "ENV_TOKEN_USER", "")
+    assert paperless.user_config(anna) == ("", "medical", False)
+    paperless.check_env()
+    assert "PAPERLESS_TOKEN_USER" in caplog.text
+    # Named user: only fred, even though anna is the first administrator.
+    monkeypatch.setattr(paperless, "ENV_TOKEN_USER", "fred")
+    fred_id = c.post("/api/users", json={"username": "Fred", "password": PW}).json()["id"]
+    assert paperless.user_config(anna)[0] == ""
+    assert login("fred").get("/api/me/paperless").json() | {} == paperless.public_config(fred_id)
+    assert paperless.public_config(fred_id)["tokenFromServer"] is True
+    # It does not move to whoever becomes an administrator.
+    assert c.put(f"/api/users/{fred_id}/admin", json={"isAdmin": True}).status_code == 200
+    assert paperless.user_config(anna)[0] == ""
 
 
 def test_paperless_next_link_to_another_host_is_not_followed(monkeypatch):

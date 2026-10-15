@@ -12,8 +12,9 @@ export class HttpApi {
     this.can = { sync: IS_IPHONE, accounts: true, paperless: true, import: true };
   }
 
-  async req(path, { method = 'GET', body, raw } = {}) {
-    const headers = { 'X-Requested-With': 'health-diary' }; // the server refuses cookie requests without it
+  async req(path, { method = 'GET', body, raw, headers: extra } = {}) {
+    // X-Requested-With: the server refuses cookie requests without it.
+    const headers = { 'X-Requested-With': 'health-diary', ...(extra || {}) };
     let payload = body;
     if (body !== undefined && !(body instanceof FormData)) {
       headers['Content-Type'] = 'application/json';
@@ -27,6 +28,7 @@ export class HttpApi {
       const detail = Array.isArray(data.detail) ? 'Some values are not valid.' : data.detail;
       const err = new Error(detail || `The server answered ${res.status}.`);
       err.status = res.status;
+      err.data = data; // for 409: the newer version on the server
       throw err;
     }
     if (raw) return res;
@@ -57,10 +59,24 @@ export class HttpApi {
   deleteUser(id) { return this.req(`/users/${id}`, { method: 'DELETE' }); }
 
   // ---------- Diary
-  getProfile() { return this.req('/profile'); }
-  saveProfile(p) { return this.req('/profile', { method: 'PUT', body: p }); }
+  // Versions: a save names the version it started from. When another device saved in between,
+  // the server answers 409 with the newer version (err.status 409, err.data), and nothing is lost.
+  async getProfile() {
+    const res = await this.req('/profile', { raw: true });
+    const profile = await res.json();
+    Object.defineProperty(profile, 'version', { value: Number(res.headers.get('x-version')) || 0, enumerable: false, writable: true });
+    return profile;
+  }
+  /** Returns { version }. With baseVersion, throws a 409 error when the profile changed elsewhere. */
+  saveProfile(p, baseVersion) {
+    return this.req('/profile', { method: 'PUT', body: p, headers: baseVersion != null ? { 'X-Base-Version': String(baseVersion) } : {} });
+  }
+  /** Returns { date, log, health, logVersion }. */
   getDay(date) { return this.req(`/days/${date}`); }
-  saveLog(date, log) { return this.req(`/days/${date}/log`, { method: 'PUT', body: log }); }
+  /** Returns { logVersion }. With baseVersion, throws a 409 error (err.data = { log, logVersion }) on conflict. */
+  saveLog(date, log, baseVersion) {
+    return this.req(`/days/${date}/log`, { method: 'PUT', body: log, headers: baseVersion != null ? { 'X-Base-Version': String(baseVersion) } : {} });
+  }
   saveHealth(date, h) { return this.req(`/days/${date}/health`, { method: 'PUT', body: h }); }
   listDays(from, to) { return this.req(`/days?${new URLSearchParams({ from: from || '', to: to || '' })}`); }
   listMeasurements(type, from, to) {

@@ -1,11 +1,11 @@
 // HTML templates for the Today screen. Pure functions: state in, HTML string out.
 // Every value goes through esc(). Behaviour lives in today.js.
 import { label, longLabel, relativeDay } from '../core/dates.js';
-import { duration, esc, num } from '../core/format.js';
-import { DRINKS, MEALS, MEASUREMENTS, PERIODS, SEVERITIES, medLabel } from '../core/schema.js';
+import { duration, esc, fold, num, plural } from '../core/format.js';
+import { DRINKS, MEALS, MEASUREMENTS, PERIODS, SEVERITIES, bmi, medLabel } from '../core/schema.js';
 import { ICON } from '../core/ui.js';
 import {
-  clip, drinkText, drinksSummary, healthItems, healthSource, mealSummary, measurementsSummary, medsSummary,
+  clip, drinksSummary, healthItems, healthSource, mealSummary, measurementsSummary, medsSummary,
   sleepStages, snacksSummary, symptomDetail, symptomsSummary,
 } from './today-model.js';
 
@@ -42,17 +42,27 @@ export function weekStrip(st) {
   const days = st.week.map(d => {
     const future = d > st.today;
     const selected = d === st.date;
+    const focusable = st.week.includes(st.date) ? selected : d === st.week[0];
     const has = !!st.weekHas[d];
     const words = [longLabel(d), d === st.today ? 'today' : '', selected ? 'shown' : '', future ? 'in the future' : has ? 'has entries' : 'no entries']
       .filter(Boolean).join(', ');
     return `<li><button type="button" class="wd${selected ? ' is-selected' : ''}${d === st.today ? ' is-today' : ''}" data-act="pick" data-date="${esc(d)}"
-        aria-label="${esc(words)}"${d === st.today ? ' aria-current="date"' : ''}${future ? ' disabled' : ''} tabindex="${selected ? '0' : '-1'}">
+        aria-label="${esc(words)}"${d === st.today ? ' aria-current="date"' : ''}${future ? ' disabled' : ''} tabindex="${focusable ? '0' : '-1'}">
         <span class="wd-name" aria-hidden="true">${esc(label(d, { weekday: 'short' }))}</span>
         <span class="wd-num" aria-hidden="true">${esc(label(d, { day: 'numeric' }))}</span>
         <span class="wd-dot${has ? ' on' : ''}" aria-hidden="true"></span>
       </button></li>`;
   }).join('');
-  return `<nav class="week" aria-label="${esc(`Week of ${label(st.week[0], { day: 'numeric', month: 'long' })}. Swipe to change week.`)}">
+  const first = st.week[0], last = st.week[6];
+  const range = first.slice(5, 7) === last.slice(5, 7)
+    ? `${label(first, { day: 'numeric' })}–${label(last, { day: 'numeric', month: 'short' })}`
+    : `${label(first, { day: 'numeric', month: 'short' })} – ${label(last, { day: 'numeric', month: 'short' })}`;
+  return `<nav class="week" aria-label="Days of the week">
+    <div class="week-head">
+      <span class="week-range" aria-live="polite">${esc(range)}</span>
+      <button type="button" class="icon-btn" data-act="week" data-step="-1" aria-label="Previous week">${ICON.left}</button>
+      <button type="button" class="icon-btn" data-act="week" data-step="1" aria-label="Next week"${last >= st.today ? ' disabled' : ''}>${ICON.right}</button>
+    </div>
     <ol class="week-days">${days}</ol>
   </nav>`;
 }
@@ -81,7 +91,8 @@ function row(st, key, { icon, title, summary, level = 3, body }) {
 /** Text for a collapsed row when nothing is logged. */
 export function emptyOf(st, key) {
   return {
-    snacks: 'None logged', drinks: 'Not recorded', meds: st.scheduled.length ? 'Nothing taken yet' : 'None logged',
+    snacks: 'None logged', drinks: 'Not recorded',
+    meds: st.scheduled.length ? 'Nothing taken yet' : st.asNeeded.length || st.profileError ? 'None logged' : 'Add your medication in Profile',
     symptoms: 'None logged', notes: 'No notes', measurements: st.measures === 'loading' ? 'Loading…' : 'None this day',
   }[key] || 'Not logged yet';
 }
@@ -102,29 +113,40 @@ export function summaryOf(st, key) {
   }
 }
 
-// ---------- Sections. Order = phone reading order. Desktop places them in two columns.
+// ---------- Sections
+// Phone: one column in reading order (Health, Meals, Drinks, Medication, What I did, Symptoms, Notes,
+// Measurements). Wide screens: two columns, and the DOM follows the columns (writing, then numbers),
+// so Tab and screen readers read one column after the other.
 
 export function sections(st) {
-  return `<div class="today-grid">
-    ${healthSection(st)}
-    <section class="tsec card col-write" data-sec="meals" aria-labelledby="h-meals">
+  const s = {
+    health: healthSection(st),
+    meals: `<section class="tsec card" data-sec="meals" aria-labelledby="h-meals">
       <h2 class="tsec-title" id="h-meals">Meals</h2>
       ${row(st, 'breakfast', mealRowOpts(st, 'breakfast'))}
       ${row(st, 'lunch', mealRowOpts(st, 'lunch'))}
       ${row(st, 'snacks', { icon: ICON.snack, title: 'Snacks', summary: summaryOf(st, 'snacks'), body: snacksBody(st) })}
       ${row(st, 'dinner', mealRowOpts(st, 'dinner'))}
-    </section>
-    ${single(st, 'drinks', 'col-num', { icon: ICON.drink, title: 'Drinks', body: drinksBody(st) })}
-    ${single(st, 'meds', 'col-num', { icon: ICON.pill, title: 'Medication', body: medsBody(st) })}
-    ${single(st, 'activities', 'col-write', { icon: ICON.activity, title: 'What I did', body: textBody(st, 'activities', 'What did you do?', 'Work, sport, rest, travel…') })}
-    ${single(st, 'symptoms', 'col-write', { icon: ICON.symptom, title: 'Symptoms', body: symptomsBody(st) })}
-    ${single(st, 'notes', 'col-write', { icon: ICON.note, title: 'Notes', body: textBody(st, 'notes', 'Notes', 'Anything else you want to remember') })}
-    ${single(st, 'measurements', 'col-num', { icon: ICON.scale, title: 'Measurements', body: measurementsBody(st) })}
-  </div>`;
+    </section>`,
+    drinks: single(st, 'drinks', { icon: ICON.drink, title: 'Drinks', body: drinksBody(st) }),
+    meds: single(st, 'meds', { icon: ICON.pill, title: 'Medication', body: medsBody(st) }),
+    activities: single(st, 'activities', { icon: ICON.activity, title: 'What I did', body: textBody(st, 'activities', 'What did you do?', 'Work, sport, rest, travel…') }),
+    symptoms: single(st, 'symptoms', { icon: ICON.symptom, title: 'Symptoms', body: symptomsBody(st) }),
+    notes: single(st, 'notes', { icon: ICON.note, title: 'Notes', body: textBody(st, 'notes', 'Notes', 'Anything else you want to remember') }),
+    measurements: single(st, 'measurements', { icon: ICON.scale, title: 'Measurements', body: measurementsBody(st) }),
+  };
+  const pick = keys => keys.map(k => s[k]).join('');
+  if (st.wide) {
+    return `<div class="today-cols">
+      <div class="today-col" data-col="write">${pick(['meals', 'activities', 'symptoms', 'notes'])}</div>
+      <div class="today-col" data-col="numbers">${pick(['health', 'drinks', 'meds', 'measurements'])}</div>
+    </div>`;
+  }
+  return `<div class="today-col">${pick(['health', 'meals', 'drinks', 'meds', 'activities', 'symptoms', 'notes', 'measurements'])}</div>`;
 }
 
-function single(st, key, col, opts) {
-  return `<section class="tsec card ${col}" data-sec="${esc(key)}">${row(st, key, { ...opts, level: 2, summary: summaryOf(st, key) })}</section>`;
+function single(st, key, opts) {
+  return `<section class="tsec card" data-sec="${esc(key)}">${row(st, key, { ...opts, level: 2, summary: summaryOf(st, key) })}</section>`;
 }
 
 function mealRowOpts(st, key) {
@@ -151,10 +173,11 @@ export function healthSection(st) {
   const icon = { sleep: ICON.moon, steps: ICON.steps, restingHr: ICON.heart, hrv: ICON.symptom };
   const inner = items.length
     ? `<span class="sr-only">Apple Health: </span><span class="h-items">${items.map(i => `<span class="h-item h-${esc(i.key)}">${icon[i.key]}<span class="sr-only">${esc(i.label)} </span><span class="h-val">${esc(i.value)}</span>${i.unit ? `<span class="h-unit">${esc(i.unit === 'ms HRV' ? 'ms' : i.unit)}</span>` : ''}</span>`).join('')}</span>`
-    : `<span class="trow-icon">${ICON.heart}</span><span class="trow-text"><span class="trow-title">Apple Health</span><span class="trow-sum is-empty">No data for this day</span></span>`;
-  const quickSync = canSync && !items.length
-    ? `<button type="button" class="btn small primary h-quick-sync" data-act="sync">${ICON.sync}<span>Sync now</span></button>` : '';
-  return `<section class="tsec card col-num tsec-health" data-sec="health" aria-labelledby="h-health">
+    : `<span class="h-items"><span class="h-item h-empty">${ICON.heart}<span>Apple Health: no data for this day</span></span></span>`;
+  // A small icon button in the row: it does not compete with the quick-add button.
+  const quickSync = canSync
+    ? `<button type="button" class="icon-btn h-sync" data-act="sync" aria-label="Sync Apple Health" title="Sync Apple Health">${ICON.sync}</button>` : '';
+  return `<section class="tsec card tsec-health" data-sec="health" aria-labelledby="h-health">
     <h2 class="sr-only" id="h-health">Health</h2>
     <div class="trow${open ? ' is-open' : ''}" data-row="health">
       <div class="h-row">
@@ -174,7 +197,7 @@ function healthBody(st) {
   const edited = (h && h.edited) || [];
   const mark = k => (edited.includes(k) ? '<span class="edited" title="Corrected by hand"><span aria-hidden="true">✎</span><span class="sr-only">(corrected by hand)</span></span>' : '');
   const syncBtn = canSync
-    ? `<button type="button" class="btn primary" data-act="sync">${ICON.sync}<span>${h ? 'Sync again' : 'Sync now'}</span></button>` : '';
+    ? `<button type="button" class="btn" data-act="sync">${ICON.sync}<span>${h ? 'Sync again' : 'Sync now'}</span></button>` : '';
   const editBtn = `<button type="button" class="btn" data-act="health-edit" aria-expanded="${st.healthForm}" aria-controls="health-form">${ICON.edit}<span>${h ? 'Correct by hand' : 'Enter by hand'}</span></button>`;
   let details;
   if (!h) {
@@ -195,7 +218,7 @@ function healthBody(st) {
       <div class="h-d"><dt>${ICON.steps}Steps ${mark('steps')}</dt><dd><span class="h-big">${esc(num(h.steps))}</span>${st.isToday && h.steps != null ? '<span class="h-sub">so far</span>' : ''}</dd></div>
       <div class="h-d"><dt>${ICON.heart}Resting HR ${mark('restingHr')}</dt><dd><span class="h-big">${esc(num(h.restingHr))}</span><span class="h-sub">bpm</span></dd></div>
       <div class="h-d"><dt>${ICON.symptom}HRV ${mark('hrv')}</dt><dd><span class="h-big">${esc(num(h.hrv))}</span><span class="h-sub">ms</span></dd></div>
-      ${h.workouts && h.workouts.length ? `<div class="h-d h-d-wide"><dt>${ICON.activity}Workouts</dt>${h.workouts.map(w => `<dd>${esc(w.type)} · ${esc(w.minutes)} min${w.start ? ` · ${esc(w.start)}` : ''}</dd>`).join('')}</div>` : ''}
+      ${h.workouts && h.workouts.length ? `<div class="h-d h-d-wide"><dt>${ICON.activity}Workouts</dt>${h.workouts.map(w => `<dd>${esc(w.type)} · ${esc(w.minutes)} min active${w.start ? ` · from ${esc(w.start)}` : ''}</dd>`).join('')}</div>` : ''}
     </dl>
     <p class="h-source">${esc(healthSource(h, st.today))}${edited.length ? ' · ✎ Corrected by hand. A new sync keeps your corrections.' : ''}</p>`;
   }
@@ -230,8 +253,8 @@ function mealBody(st, key) {
   const m = st.log.meals[key];
   const def = MEALS.find(x => x.key === key);
   return `<div class="meal-edit">
-    <label class="field meal-time"><span>Time</span><input class="time" type="time" data-f="meal-time" data-meal="${esc(key)}" value="${esc(m.time)}"></label>
     <label class="field grow"><span>What did you eat?</span><textarea rows="2" data-f="meal-text" data-meal="${esc(key)}" placeholder="${esc(`${def.label}: food and drink`)}">${esc(m.text)}</textarea></label>
+    <label class="field meal-time"><span>Time</span><input class="time" type="time" data-f="meal-time" data-meal="${esc(key)}" value="${esc(m.time)}"></label>
   </div>`;
 }
 
@@ -245,11 +268,13 @@ function snacksBody(st) {
     <button type="button" class="btn small add-btn" data-act="add-snack">${ICON.plus}<span>Add a snack</span></button>`;
 }
 
+const drinkCount = (d, v) => (v == null ? 'Not recorded' : v === 0 ? 'None' : plural(v, d.one, d.many));
+
 function drinksBody(st) {
   return `<ul class="drink-list">${DRINKS.map(d => {
     const v = st.log.drinks[d.key];
     return `<li class="drink" data-drink="${esc(d.key)}">
-      <span class="drink-name">${esc(d.label)}<span class="drink-val${v == null ? ' is-empty' : ''}" id="dv-${esc(d.key)}" aria-live="polite">${esc(drinkText(d, v))}</span></span>
+      <span class="drink-name">${esc(d.label)}<span class="drink-val${v == null ? ' is-empty' : ''}" id="dv-${esc(d.key)}" aria-live="polite">${esc(drinkCount(d, v))}</span></span>
       <span class="stepper">
         <button type="button" class="icon-btn step" data-act="drink" data-key="${esc(d.key)}" data-d="-1" aria-label="${esc(`One ${d.one} less of ${d.label.toLowerCase()}`)}" aria-describedby="dv-${esc(d.key)}"${v === 0 ? ' disabled' : ''}>${ICON.minus}</button>
         <span class="step-num" aria-hidden="true">${esc(v == null ? '–' : v)}</span>
@@ -271,14 +296,14 @@ function medsBody(st) {
     return `<li class="med${t.done ? ' is-done' : ''}" data-id="${esc(m.id)}"><label class="check grow">
         <input type="checkbox" data-f="med" data-id="${esc(m.id)}"${t.done ? ' checked' : ''}>
         <span class="grow">${esc(m.name)}${m.dose ? `<span class="sub">${esc(m.dose)}</span>` : ''}</span></label>
-        ${t.done ? `<span class="pill ok med-time">${ICON.check}<span>${esc(t.time || 'Taken')}</span></span>` : ''}
+        ${t.done ? timeChip(st, `med:${m.id}`, t.time, m.name, `data-f="med-time" data-id="${esc(m.id)}"`) : ''}
       </li>`;
   }).join('')}</ul>`
-    : `<p class="hint">No regular medication for this day. You can add your medication in Profile.</p>
-       <button type="button" class="btn small" data-act="open-profile">${ICON.user}<span>Open Profile</span></button>`;
+    : `<p class="hint">${esc(st.asNeeded.length ? 'No regular medication for this day.' : 'Add your medication in Profile. Then you can tick it here each day.')}</p>
+       <button type="button" class="btn small add-btn" data-act="open-profile">${ICON.user}<span>Add medication in Profile</span></button>`;
   const extra = l.meds.extra.length ? `<ul class="extra-list">${l.meds.extra.map((x, i) => `<li class="extra" data-i="${esc(i)}">
-      <input class="time" type="time" data-f="extra-time" data-i="${esc(i)}" value="${esc(x.time)}" aria-label="${esc(`Time for ${x.name || 'medication'}`)}">
       <input type="text" data-f="extra-name" data-i="${esc(i)}" value="${esc(x.name)}" aria-label="${esc(`Other medication ${i + 1}`)}">
+      ${timeChip(st, `extra:${i}`, x.time, x.name || 'medication', `data-f="extra-time" data-i="${esc(i)}"`)}
       <button type="button" class="icon-btn" data-act="del-extra" data-i="${esc(i)}" aria-label="${esc(`Remove ${x.name || 'medication'}`)}">${ICON.trash}</button>
     </li>`).join('')}</ul>` : '';
   const prn = st.asNeeded.map(m => `<button type="button" class="chip" data-act="add-prn" data-id="${esc(m.id)}">${ICON.plus}${esc(medLabel(m))}</button>`).join('');
@@ -293,6 +318,18 @@ function medsBody(st) {
         <button type="submit" class="btn">Add</button>
       </form>
     </div>`;
+}
+
+/**
+ * The time a medication was taken: a button "✓ 21:05" that turns into a time field when tapped.
+ * The report uses these times, so they must be easy to correct.
+ */
+function timeChip(st, key, time, name, fieldAttrs) {
+  if (st.editTime === key) {
+    return `<input class="time med-time-input" type="time" ${fieldAttrs} value="${esc(time)}" aria-label="${esc(`Time ${name} was taken`)}">`;
+  }
+  return `<button type="button" class="med-time" data-act="edit-time" data-key="${esc(key)}"
+    aria-label="${esc(time ? `Taken at ${time}. Change the time.` : `Add the time ${name} was taken.`)}">${ICON.check}<span>${esc(time || 'Add time')}</span></button>`;
 }
 
 function textBody(st, key, lbl, placeholder) {
@@ -312,13 +349,13 @@ export const SEV_OPTIONS = SEVERITIES.map(s => ({ value: String(s.value), label:
 const WHEN_OPTIONS = [{ value: 'day', label: 'All day' }, { value: 'periods', label: 'Part of day' }, { value: 'time', label: 'Time' }];
 
 export function symptomChips(st) {
-  const logged = new Set(st.log.symptoms.map(s => s.name.toLowerCase()));
+  const logged = new Set(st.log.symptoms.map(s => fold(s.name)));
   const names = st.symptomNames;
   const shown = st.showAllSymptoms ? names : names.slice(0, CHIPS_SHOWN);
   // Logged symptoms always show, also when they are far down the list.
-  for (const s of st.log.symptoms) if (!shown.some(n => n.toLowerCase() === s.name.toLowerCase())) shown.push(s.name);
+  for (const s of st.log.symptoms) if (!shown.some(n => fold(n) === fold(s.name))) shown.push(s.name);
   const chips = shown.map(n => {
-    const on = logged.has(n.toLowerCase());
+    const on = logged.has(fold(n));
     return `<button type="button" class="chip${on ? ' is-logged' : ''}" data-act="sym-chip" data-name="${esc(n)}" aria-pressed="${on}">${on ? ICON.check : ''}${esc(n)}</button>`;
   }).join('');
   const more = names.length > CHIPS_SHOWN
@@ -349,7 +386,7 @@ export function symptomItem(st, s, i) {
       <button type="button" class="icon-btn" data-act="del-sym" data-i="${esc(i)}" aria-label="${esc(`Remove ${s.name}`)}">${ICON.trash}</button>
     </div>
     <div class="sym-field${needs ? ' needs' : ''}">
-      <span class="label" id="${esc(sevId)}">${needs ? 'How bad?' : 'How bad'}<span class="sr-only"> is the ${esc(s.name.toLowerCase())}</span></span>
+      <span class="label-row"><span class="label" id="${esc(sevId)}">How bad?<span class="sr-only"> (${esc(s.name)})</span></span>${needs ? '<span class="hint">Not chosen yet</span>' : ''}</span>
       ${radios({ name: 'sev', i, options: SEV_OPTIONS, value: s.severity == null ? null : String(s.severity), labelId: sevId, cls: 'sev-seg' })}
     </div>
     <div class="sym-field">
@@ -376,8 +413,9 @@ function measurementsBody(st) {
     const def = MEASUREMENTS[m.type];
     if (!def) return '';
     const flag = def.flag(m.value);
+    const b = m.type === 'weight' ? bmi(m.value, st.heightCm) : null;
     return `<li data-id="${esc(m.id)}"><span class="grow">${esc(def.label)}<span class="sub">${esc([m.time, m.source === 'apple' ? 'Apple Health' : ''].filter(Boolean).join(' · ') || 'No time')}</span></span>
-      <span class="m-val num">${esc(def.format(m.value))}</span>${flag ? `<span class="pill caution">${esc(flag)}</span>` : ''}
+      <span class="m-val num">${esc(def.format(m.value))}${b ? `<span class="sub">BMI ${esc(b)}</span>` : ''}</span>${flag ? `<span class="pill caution">${esc(flag)}</span>` : ''}
       <button type="button" class="icon-btn" data-act="del-measure" data-id="${esc(m.id)}" aria-label="${esc(`Remove ${def.label.toLowerCase()} ${def.format(m.value)}`)}">${ICON.trash}</button></li>`;
   }).join('');
   return `${list ? `<ul class="rows m-list">${list}</ul>` : '<p class="hint">No measurements for this day.</p>'}${add}`;

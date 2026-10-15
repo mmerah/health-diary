@@ -1,9 +1,8 @@
 // Pure helpers for the Records screen. No DOM.
+import { fold } from '../core/format.js';
 
 /** Categories in the documents, sorted by name. */
 export const categoriesOf = docs => [...new Set(docs.map(d => d.category).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-
-const fold = s => String(s || '').toLocaleLowerCase('en').normalize('NFD').replace(/[̀-ͯ]/g, '');
 
 /** Documents that match the search words (title, correspondent or text) and the category; newest first. */
 export function filterDocs(docs, { query = '', category = '' } = {}) {

@@ -1,6 +1,6 @@
 /* Today screen and quick-add sheet. Only tokens from base.css. Phone first; two columns from 1000px. */
 
-.today { display: flex; flex-direction: column; gap: var(--gap); }
+.today { display: flex; flex-direction: column; gap: var(--gap); padding-bottom: 72px; } /* the last row clears the + button */
 .today-top { display: flex; flex-direction: column; gap: 16px; }
 
 /* ---------- Header: the date is a button that opens the date picker */
@@ -16,7 +16,7 @@
 .date-eyebrow { font-family: var(--font-body); font-size: 0.85rem; font-weight: 700; color: var(--muted); letter-spacing: 0.02em; }
 .date-main {
   display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-display); font-size: 1.6rem; font-weight: 700;
-  line-height: 1.15; letter-spacing: -0.01em;
+  line-height: 1.15; letter-spacing: -0.01em; white-space: nowrap;
 }
 .date-main svg { flex: none; width: 20px; height: 20px; color: var(--muted); margin-top: 3px; }
 /* The native picker: present for showPicker(), not visible. */
@@ -31,7 +31,10 @@
 .back-today svg { width: 16px; height: 16px; }
 
 /* ---------- Week strip: 7 days fitted to the width */
-.week { background: var(--surface); border-radius: var(--r); box-shadow: var(--shadow); padding: 6px; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.week { background: var(--surface); border-radius: var(--r); box-shadow: var(--shadow); padding: 2px 6px 6px; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.week-head { display: flex; align-items: center; gap: 2px; padding-left: 10px; }
+.week-range { flex: 1; font-size: 0.85rem; font-weight: 700; color: var(--muted); }
+.week-head .icon-btn { color: var(--muted); }
 .week-days { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; }
 .wd {
   width: 100%; min-height: 64px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
@@ -49,7 +52,7 @@
 .wd:disabled { opacity: 0.35; cursor: default; }
 
 /* ---------- Sections: cards made of collapsible rows */
-.today-grid { display: flex; flex-direction: column; gap: var(--gap); }
+.today-col { display: flex; flex-direction: column; gap: var(--gap); min-width: 0; }
 .tsec.card { padding: 4px 0; gap: 0; }
 .tsec-title {
   padding: 12px 16px 2px; font-family: var(--font-body); font-size: 0.8rem; font-weight: 700; color: var(--muted);
@@ -79,10 +82,11 @@
 .trow-body[hidden] { display: none; }
 
 /* ---------- Health: one slim row */
-.h-row { display: flex; align-items: center; gap: 8px; padding-right: 12px; }
+.h-row { display: flex; align-items: center; gap: 4px; padding-right: 8px; }
 .h-row .h-toggle { flex: 1; min-width: 0; min-height: 56px; }
-.h-row:not(:has(.h-quick-sync)) { padding-right: 0; }
-.h-items { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px 14px; overflow: hidden; }
+.h-row:not(:has(.h-sync)) { padding-right: 0; }
+.h-items { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px 12px; overflow: hidden; }
+@media (max-width: 430px) { .h-unit { display: none; } } /* four values fit on one line; screen readers still hear the names */
 .h-item { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; }
 .h-item svg { width: 17px; height: 17px; align-self: center; }
 .h-val { font-family: var(--font-data); font-variant-numeric: tabular-nums; font-weight: 600; font-size: 0.95rem; }
@@ -90,8 +94,9 @@
 .h-sleep svg { color: var(--sleep); }
 .h-steps svg { color: var(--activity); }
 .h-restingHr svg, .h-hrv svg { color: var(--heart); }
-.h-quick-sync { flex: none; }
-.trow.is-open .h-quick-sync { display: none; }
+.h-sync { color: var(--muted); }
+.h-empty { align-items: center; color: var(--muted); font-size: 0.95rem; }
+.h-empty svg { color: var(--heart); }
 
 .h-details { margin: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px 12px; }
 .h-d { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -120,7 +125,7 @@
 .health-form { padding-top: 4px; }
 
 /* ---------- Meals, snacks, other medication */
-.meal-edit { display: flex; flex-direction: column-reverse; gap: var(--gap-in); }
+.meal-edit { display: flex; flex-direction: column; gap: var(--gap-in); }
 .meal-time { flex-direction: row; align-items: center; gap: 12px; }
 .snack-list, .extra-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .snack, .extra { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; border-radius: 12px; }
@@ -143,7 +148,16 @@
 
 /* ---------- Medication */
 .med-list .check { flex: 1; min-width: 0; }
+/* Time taken: looks like a small green label, but it is a 44px button that opens a time field. */
+.med-time {
+  flex: none; display: inline-flex; align-items: center; gap: 5px; min-height: var(--touch); padding: 0 12px;
+  border: 0; border-radius: 999px; background: var(--ok-soft); color: var(--ok); cursor: pointer;
+  font: inherit; font-family: var(--font-data); font-variant-numeric: tabular-nums; font-size: 0.875rem; font-weight: 600;
+}
 .med-time svg { width: 14px; height: 14px; }
+.med-time:hover { background: color-mix(in srgb, var(--ok-soft) 70%, var(--ok)); }
+.med-time-input { flex: none; }
+.extra { grid-template-columns: minmax(0, 1fr) auto auto; }
 .med-list > li { border-radius: 0; }
 
 /* ---------- Symptoms */
@@ -158,7 +172,8 @@
 .sym-detail { flex: 1; min-width: 0; font-size: 0.85rem; color: var(--muted); }
 .sym-head .icon-btn { margin-left: auto; color: var(--muted); }
 .sym-field { display: flex; flex-direction: column; gap: 6px; }
-.sym-field.needs .label { color: var(--accent); }
+.label-row { display: flex; align-items: baseline; gap: 8px; }
+.label-row .hint { font-size: 0.85rem; }
 .sym-field.needs .seg { background: var(--accent-soft); }
 .today .seg button, .qa .seg button { min-height: var(--touch); display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 .time-range { display: flex; flex-wrap: wrap; gap: 12px; }
@@ -192,9 +207,6 @@
 .qa-tile:active { transform: scale(0.98); }
 .qa-head { display: flex; align-items: center; gap: 4px; margin: -4px 0 0 -10px; }
 .qa-head h3 { font-size: 1.05rem; }
-.qa-drinks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.qa-drink { min-height: 96px; flex-direction: column; gap: 4px; }
-.qa-drink .qa-now { font-size: 0.8rem; font-weight: 400; color: var(--muted); }
 .seg.qa-when { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .qa-list { display: flex; flex-direction: column; gap: 8px; }
 .qa-list .btn { justify-content: flex-start; text-align: left; min-height: 52px; }
@@ -210,10 +222,12 @@
   .date-main { font-size: 1.9rem; }
 }
 @media (min-width: 1000px) {
-  .today-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 520px); align-items: end; gap: 24px; }
-  /* Two columns: writing on the left, numbers on the right. today.js sets each card's row span from
-     its height (4px rows), so a tall card in one column does not push the other column down. */
-  .today-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--gap); row-gap: 0; grid-auto-rows: 4px; grid-auto-flow: row dense; align-items: start; }
-  .col-write { grid-column: 1; }
-  .col-num { grid-column: 2; }
+  .today { padding-bottom: 96px; }
+  /* Header and week sit above the two columns, aligned with them. */
+  .today-top { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: var(--gap); }
+  .today-title-row { justify-content: flex-start; }
+  .today-title { flex: none; }
+  .today-head { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+  /* Two columns: writing on the left, numbers on the right. today-view.js puts them in this DOM order. */
+  .today-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gap); align-items: start; }
 }

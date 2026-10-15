@@ -1,11 +1,12 @@
 // The report as formatted HTML for a doctor: on screen, printed or saved as PDF.
 // Every value is escaped. No inline styles or handlers (strict CSP); classes are in css/report.css and css/print.css.
-import { fullLabel, today as todayIso } from '../core/dates.js';
+import { fullLabel, minToHm, today as todayIso } from '../core/dates.js';
 import { esc } from '../core/format.js';
+import { describeWhen, drinkSummary } from '../core/schema.js';
 import { safeCategory } from './redact.js';
-import { dayLines, writers } from './markdown.js';
+import { ADHERENCE_RULE, dayLines, DOC_SCOPE_TEXT, monthName, TABLE_TEXT, truncate, weeklyText, writers } from './markdown.js';
 import {
-  drinkText, drinksShort, flagText, LEVEL_WORD, labValue, measurementText, medName,
+  drinkText, flagText, LEVEL_WORD, labValue, measurementText, medName,
   one, pct, plural, severityText, severityWords, sevShort, sleepText, stepsText, TREND, whenText,
 } from './words.js';
 
@@ -50,6 +51,9 @@ export function toHtml(model, opts = {}) {
     const t = flagText(f, h);
     return `<li class="rp-flag"><span class="pill ${PILL[f.level]}">${esc(LEVEL_WORD[f.level])}</span><div><strong>${esc(t.area)}</strong> ${esc(t.text)}</div></li>`;
   });
+  if (model.lowData) {
+    flags.push(`<li class="rp-flag"><span class="pill">Note</span><div><strong>Not enough diary days to spot changes</strong> (${esc(plural(model.coverage.diaryDays, 'day'))}).</div></li>`);
+  }
   out.push(section('flags', 'Key points', flags.length ? `<ul class="rp-flags">${flags.join('')}</ul>`
     : '<p>Nothing stands out in the measurements, symptoms, medication and lab values of this period.</p>',
   p.partial ? `The last day (${D(p.partial)}) is today and not complete. It is in the daily log but not in averages.` : ''));
@@ -65,6 +69,7 @@ export function toHtml(model, opts = {}) {
       'Days where a drink was not recorded are left out.'));
   }
   if (inc.associations && model.associations.length) out.push(associationsHtml());
+  if (model.monthly && model.monthly.length) out.push(monthlyHtml());
   if (inc.documents) out.push(documentsHtml());
   if (inc.daily && model.daily.rows.length) out.push(dailyHtml());
 
@@ -92,16 +97,12 @@ export function toHtml(model, opts = {}) {
   function medsHtml() {
     const { scheduled, asNeeded, timeline } = model.meds;
     if (!scheduled.length && !asNeeded.length && !timeline.length) return '';
-    const rows = [
-      ...scheduled.map(x => ({ cls: x.rate != null && x.rate < 0.8 && x.eligible >= 5 ? 'is-flag' : '',
-        cells: [{ html: `${esc(T(medName(x)))}<span class="rp-muted rp-block">Scheduled</span>` },
-          x.eligible ? `${x.taken} of ${x.eligible} days (${pct(x.rate)})` : 'No diary days', x.usualTime || '–'] })),
-      ...asNeeded.map(x => [{ html: `${esc(T(x.name))}<span class="rp-muted rp-block">${x.profile ? 'As needed' : 'Not in the list'}</span>` },
-        x.uses ? `${plural(x.uses, 'time')} on ${plural(x.days, 'day')}` : 'Not used', x.usualTime || '–']),
+    const items = [
+      ...scheduled.map(x => `<li${x.rate != null && x.rate < 0.8 && x.eligible >= 5 ? ' class="is-flag"' : ''}><strong>${esc(T(medName(x)))}</strong>: ${esc(x.eligible ? `taken on ${x.taken} of ${plural(x.eligible, 'day')} (${pct(x.rate)})${x.usualTime ? `, usually at ${x.usualTime}` : ''}` : 'no diary days while it was active')}.</li>`),
+      ...asNeeded.map(x => `<li><strong>${esc(T(x.name))}</strong> <span class="rp-muted">(${x.profile ? 'as needed' : 'not in the list'})</span>: ${esc(x.uses ? `${plural(x.uses, 'time')} on ${plural(x.days, 'day')}${x.usualTime ? `, usually at ${x.usualTime}` : ''}` : 'not used')}.</li>`),
     ];
-    const tl = timeline.length ? `<p class="rp-sub">Start and stop dates</p>${list(timeline.map(e => `${esc(D(e.date))}: ${esc(e.type)} ${esc(T(e.name))}`))}` : '';
-    return section('meds', 'Medication taken', `${table(['Medication', 'Taken', 'Usual time'], rows, { numeric: [2], caption: 'Medication taken' })}${tl}`,
-      'Scheduled medication: days with a diary entry while it was active. A day with an entry and no tick counts as not taken.');
+    const tl = timeline.length ? `<p class="rp-note">Started or stopped: ${esc(timeline.map(e => `${T(e.name)} ${e.type} ${D(e.date)}`).join('; '))}.</p>` : '';
+    return section('meds', 'Medication taken', `<ul class="rp-list rp-tight">${items.join('')}</ul>${tl}`, ADHERENCE_RULE);
   }
 
   function symptomsHtml() {
@@ -113,7 +114,7 @@ export function toHtml(model, opts = {}) {
           <span class="pill ${flagged ? 'caution' : s.trend === 'less' ? 'ok' : ''}">${esc(TREND[s.trend])}</span></div>
         <p>Severity: ${esc(severityText(s))}. Median: ${esc(severityWords(s.median))}.</p>
         <p>When: ${esc(whenText(s))}.</p>
-        ${s.weekly.reduce((a, b) => a + b, 0) > 1 ? `<p class="rp-weekly"><span class="rp-muted">Per week</span> ${spark(s.weekly)} <span class="rp-muted rp-mono">${esc(s.weekly.join(' '))}</span></p>` : ''}
+        ${s.weekly.reduce((a, b) => a + (b || 0), 0) > 1 ? `<p class="rp-weekly"><span class="rp-muted">Per week</span> ${spark(s.weekly)} <span class="rp-muted rp-mono">${esc(weeklyText(s.weekly))}</span></p>` : ''}
       </li>`;
     });
     return section('symptoms', 'Symptoms', `<ul class="rp-syms">${items.join('')}</ul>`,
@@ -121,26 +122,30 @@ export function toHtml(model, opts = {}) {
   }
 
   function spark(weekly) {
-    const max = Math.max(1, ...weekly);
-    const bars = weekly.map(v => `<span class="rp-sb rp-h${Math.round((v / max) * 4)}" title="${esc(v)}"></span>`).join('');
-    return `<span class="rp-spark" aria-label="${esc(`Days per week: ${weekly.join(', ')}`)}" role="img">${bars}</span>`;
+    const max = Math.max(1, ...weekly.map(v => v || 0));
+    const bars = weekly.map(v => (v == null ? '<span class="rp-sb rp-none"></span>'
+      : `<span class="rp-sb rp-h${Math.round((v / max) * 4)}"></span>`)).join('');
+    return `<span class="rp-spark" aria-label="${esc(`Days per week: ${weeklyText(weekly).split(' ').join(', ')}`)}" role="img">${bars}</span>`;
   }
 
   function measurementsHtml() {
     const types = ['weight', 'bp', 'temp'].map(t => model.measurements[t]).filter(x => x.rows.length || x.before);
     if (!types.length) return '';
-    const blocks = types.map(x => {
-      const rows = [];
-      const at = r => ({ html: `${esc(D(r.date))}${r.time ? ` <span class="rp-muted">${esc(r.time)}</span>` : ''}`, cls: 'rp-nowrap' });
-      if (x.before) rows.push({ cls: 'is-before', cells: [at(x.before), measurementText(x.before), 'Before the period'] });
-      for (const r of x.rows) {
-        const flag = { weight: () => null, bp: v => (v.sys >= 140 || v.dia >= 90 ? 'High' : v.sys < 90 || v.dia < 60 ? 'Low' : null), temp: v => (v >= 38 ? 'Fever' : null) }[x.type](r.value);
-        rows.push({ cls: flag ? 'is-flag' : '', cells: [at(r), measurementText(r), { html: flag ? `<span class="pill high">${esc(flag)}</span>` : '' }] });
-      }
-      const change = x.change ? `<p class="rp-note">Change in the period: ${esc(`${x.change.kg > 0 ? '+' : ''}${one(x.change.kg)} kg (${x.change.pct > 0 ? '+' : ''}${one(x.change.pct)}%)`)}.</p>` : '';
-      return `<div class="rp-meas-block"><h3>${esc(x.label)}</h3>${table(['Date', 'Value', ''], rows, { caption: `${x.label} readings` })}${change}</div>`;
-    }).join('');
-    return section('measurements', 'Measurements', `<div class="rp-meas">${blocks}</div>`);
+    const flagOf = { weight: () => null, bp: v => (v.sys >= 140 || v.dia >= 90 ? 'High' : v.sys < 90 || v.dia < 60 ? 'Low' : null), temp: v => (v >= 38 ? 'Fever' : null) };
+    // One line per type: the values in time order; flagged values stand out with a word.
+    const items = types.map(x => {
+      const val = r => {
+        const flag = flagOf[x.type](r.value);
+        return `<span class="rp-val${flag ? ' is-flag' : ''}"><span class="rp-nowrap">${esc(measurementText(r).replace(/ · pulse \d+/, ''))}</span> <span class="rp-muted rp-nowrap">${esc(D(r.date))}${r.time && x.type === 'temp' ? ` ${esc(r.time)}` : ''}</span>${flag ? ` <span class="pill high">${esc(flag)}</span>` : ''}</span>`;
+      };
+      const extra = [
+        x.mean && `mean ${x.mean.sys}/${x.mean.dia} mmHg over ${plural(x.mean.n, 'reading')}`,
+        x.change && `change ${x.change.kg > 0 ? '+' : ''}${one(x.change.kg)} kg (${x.change.pct > 0 ? '+' : ''}${one(x.change.pct)}%)`,
+        x.before && `before the period: ${measurementText(x.before).replace(/ · pulse \d+/, '')} (${D(x.before.date)})`,
+      ].filter(Boolean);
+      return `<li><strong>${esc(x.label)}</strong>: ${x.rows.length ? x.rows.map(val).join('<span class="rp-sep"> · </span>') : 'none in the period'}${extra.length ? `<span class="rp-muted rp-block">${esc(extra.join('; '))}</span>` : ''}</li>`;
+    });
+    return section('measurements', 'Measurements', `<ul class="rp-list rp-tight rp-meas">${items.join('')}</ul>`);
   }
 
   function labsHtml() {
@@ -154,46 +159,44 @@ export function toHtml(model, opts = {}) {
   }
 
   function wearableHtml() {
-    const w = model.wearable, o = w.overall;
-    const hm = v => (v == null ? '–' : `${String(Math.floor(v / 60) % 24).padStart(2, '0')}:${String(Math.round(v % 60)).padStart(2, '0')}`);
-    const r = (x, f) => (x ? `${f(x.median)} (${f(x.min)}–${f(x.max)})` : '–');
-    const stats = [
-      ['Sleep', r(o.sleep, sleepText), `${w.shortNights} nights under 6 h`],
-      ['Bedtime', r(o.bed, hm), ''],
-      ['Steps', r(o.steps, v => stepsText(v, false)), ''],
-      ['Resting heart rate', o.restingHr ? `${r(o.restingHr, Math.round)} bpm` : '–', ''],
-      ['HRV', o.hrv ? `${r(o.hrv, Math.round)} ms` : '–', ''],
-    ];
-    let cmp = '';
-    if (w.compare) {
-      const c = w.compare;
-      const f = (k, fn) => (c.first[k] && c.last[k] ? [fn(c.first[k].median), fn(c.last[k].median)] : ['–', '–']);
-      cmp = table(['', 'First 4 weeks', 'Last 4 weeks'], [['Sleep', ...f('sleep', sleepText)], ['Bedtime', ...f('bed', hm)],
-        ['Steps', ...f('steps', v => stepsText(v, false))], ['Resting HR (bpm)', ...f('restingHr', Math.round)], ['HRV (ms)', ...f('hrv', Math.round)]],
-      { numeric: [1, 2], caption: 'First and last 4 weeks' });
-    }
-    const weeks = table(['Week from', 'Sleep', 'Bedtime', 'Steps', 'Rest HR', 'HRV'], w.weeks.map(x => [D(x.start), sleepText(x.sleep), hm(x.bed),
+    const w = model.wearable, o = w.overall, c = w.compare;
+    const hm = v => (v == null ? '–' : minToHm(v));
+    const r = (x, f) => (x ? `${f(x.min)}–${f(x.max)}` : '–');
+    const rows = [['Sleep', 'sleep', sleepText], ['Bedtime', 'bed', hm], ['Steps', 'steps', v => stepsText(v, false)],
+      ['Resting heart rate (bpm)', 'restingHr', Math.round], ['HRV (ms)', 'hrv', Math.round]]
+      .filter(([, k]) => o[k])
+      .map(([label, k, f]) => [label, f(o[k].median), r(o[k], f), ...(c ? [c.first[k] ? f(c.first[k].median) : '–', c.last[k] ? f(c.last[k].median) : '–'] : [])]);
+    const head = ['', 'Median', 'Range', ...(c ? ['First 4 weeks', 'Last 4 weeks'] : [])];
+    const weeks = model.options.fullDaily ? `<h3>Weekly medians</h3>${table(['Week from', 'Sleep', 'Bedtime', 'Steps', 'Rest HR', 'HRV'], w.weeks.map(x => [D(x.start), sleepText(x.sleep), hm(x.bed),
       stepsText(x.steps, false), x.restingHr == null ? '–' : Math.round(x.restingHr), x.hrv == null ? '–' : Math.round(x.hrv)]),
-    { numeric: [1, 2, 3, 4, 5], caption: 'Weekly medians', cls: 'rp-compact' });
-    const workouts = w.workouts.length ? `<p class="rp-note">Workouts: ${esc(w.workouts.map(x => `${x.type} ${x.count}× (${x.minutes} min)`).join(', '))}.</p>` : '';
-    return section('wearable', 'Sleep, steps and heart rate', `<dl class="rp-stats">${stats.map(([k, v, s]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}${s ? `<span>${esc(s)}</span>` : ''}</dd></div>`).join('')}</dl>
-      ${cmp}${workouts}<h3>Weekly medians</h3>${weeks}`,
-    `Wearable data on ${plural(w.days, 'day')}. Medians with the lowest and highest values. Sleep is the night before the date.`);
+    { numeric: [1, 2, 3, 4, 5], caption: 'Weekly medians', cls: 'rp-compact' })}` : '';
+    const notes = [`${plural(w.shortNights, 'night')} under 6 h`, w.workouts.length && `workouts: ${w.workouts.map(x => `${x.type} ${x.count}×`).join(', ')}`].filter(Boolean);
+    return section('wearable', 'Sleep, steps and heart rate', `${table(head, rows, { numeric: [1, 2, 3, 4], caption: 'Wearable data', cls: 'rp-compact' })}
+      <p class="rp-note">${esc(notes.join('. '))}.</p>${weeks}`,
+    `Wearable data on ${plural(w.days, 'day')}. Sleep is the night before the date.`);
   }
 
   function associationsHtml() {
-    const groups = new Map();
-    for (const a of model.associations) groups.set(a.symptom, [...(groups.get(a.symptom) || []), a]);
-    const share = (x, label) => `${pct(x.with / x.days)} of days with ${label} (${x.with} of ${x.days})`;
-    const items = [...groups].map(([name, list]) => {
-      const small = list.some(a => a.small);
-      return `<li><p><strong>${esc(T(name))}</strong>${small ? ' <span class="rp-muted">· few days: read with care</span>' : ''}</p><ul class="rp-list">${list.map(a => {
-        const lab = a.factor === 'coffee' ? [`${a.aLabel} of coffee`, a.bLabel] : a.factor === 'sleep' ? [`${a.aLabel} of sleep`, a.bLabel] : [a.aLabel, a.bLabel];
-        return `<li><span class="rp-k">${esc(a.label[0].toUpperCase() + a.label.slice(1))}:</span> ${esc(share(a.a, lab[0]))}; ${esc(share(a.b, lab[1]))}.</li>`;
-      }).join('')}</ul></li>`;
+    // One row per symptom, one column per factor: "8 of 30 (27%) vs 6 of 37 (16%)".
+    const factors = [['coffee', 'Coffee: 3+ cups vs fewer'], ['alcohol', 'Alcohol: any vs none'], ['sleep', 'Sleep: under 6 h vs 6 h+']]
+      .filter(([k]) => model.associations.some(a => a.factor === k));
+    const names = [...new Set(model.associations.map(a => a.symptom))];
+    const cellOf = a => (a ? `${a.a.with}/${a.a.days} (${pct(a.rateA)}) vs ${a.b.with}/${a.b.days} (${pct(a.rateB)})` : '–');
+    const rows = names.map(n => {
+      const list = model.associations.filter(a => a.symptom === n);
+      return [{ html: `<strong>${esc(T(n))}</strong>${list.some(a => a.small) ? ' <span class="rp-muted">(few days)</span>' : ''}` },
+        ...factors.map(([k]) => cellOf(list.find(a => a.factor === k)))];
     });
-    return section('patterns', 'Patterns (not causes)', `<ul class="rp-assoc">${items.join('')}</ul>`,
-      'Share of diary days with the symptom, in two groups of days. This shows what happened together, not a cause.');
+    return section('patterns', 'Patterns (not causes)', table(['Symptom', ...factors.map(f => f[1])], rows, { caption: 'Patterns', cls: 'rp-compact' }),
+      'Days with the symptom out of diary days, in two groups of days. This shows what happened together, not a cause.');
+  }
+
+  function monthlyHtml() {
+    const rows = model.monthly.map(x => [monthName(x.month), `${x.diaryDays} of ${x.days}`, x.symptomDays,
+      x.symptoms.map(y => `${T(y.name)} ${y.days}`).join(', ') || '–', sleepText(x.sleep), stepsText(x.steps, false),
+      x.coffee == null ? '–' : one(x.coffee), x.alcoholDays == null ? '–' : x.alcoholDays]);
+    return section('monthly', 'Month by month', table(['Month', 'Diary days', 'Symptom days', 'Main symptoms', 'Sleep', 'Steps', 'Coffee a day', 'Alcohol days'], rows,
+      { numeric: [2, 4, 5, 6, 7], caption: 'Month by month', cls: 'rp-compact' }), 'Medians for sleep and steps.');
   }
 
   function documentsHtml() {
@@ -204,27 +207,27 @@ export function toHtml(model, opts = {}) {
       const type = ai ? safeCategory(doc.category) : doc.category;
       const meta = [type, !ai && doc.correspondent].filter(Boolean).map(x => esc(T(x))).join(' · ');
       let body = '';
-      if (doc.content) body = `<pre class="rp-text">${esc(T(doc.content))}</pre>`;
+      if (doc.content) body = `<pre class="rp-text">${esc(T(doc.content, doc.date))}</pre>`;
       else {
-        if (doc.conclusion) body += `<blockquote class="rp-conclusion">${doc.conclusion.map(l => esc(T(l))).join('<br>')}</blockquote>`;
+        if (doc.conclusion) body += `<blockquote class="rp-conclusion">${doc.conclusion.map(l => esc(T(l, doc.date))).join('<br>')}</blockquote>`;
         if (doc.hasLabs) body += '<p class="rp-note">Lab values: see "Lab results".</p>';
-        if (doc.excerpt) body += `<pre class="rp-text">${esc(T(doc.excerpt.text))}${doc.excerpt.cut ? '\n…' : ''}</pre>`;
+        if (doc.excerpt) body += `<pre class="rp-text">${esc(T(doc.excerpt.text, doc.date))}${doc.excerpt.cut ? '\n…' : ''}</pre>`;
       }
-      return `<li class="rp-docitem"><p class="rp-doc-title"><span class="rp-date">${esc(D(doc.date))}</span> <strong>${esc(T(doc.title))}</strong></p>${meta ? `<p class="rp-muted">${meta}</p>` : ''}${body}</li>`;
+      return `<li class="rp-docitem"><p class="rp-doc-title"><span class="rp-date">${esc(D(doc.date))}</span> <strong>${esc(T(doc.title, doc.date))}</strong></p>${meta ? `<p class="rp-muted">${meta}</p>` : ''}${body}</li>`;
     });
     return section('docs', 'Medical documents', `<ul class="rp-docs">${items.join('')}</ul>`,
-      model.options.docScope === 'all' ? '' : 'Documents of the period, and the latest document of each type from before the period.');
+      model.options.docScope === 'all' ? '' : DOC_SCOPE_TEXT);
   }
 
   function dailyHtml() {
     const dl = model.daily;
     const rows = dl.rows.map(r => ({ cls: r.symptoms.length ? 'is-symptom' : '', cells: [
-      `${Dday(r.date)}${r.partial ? ' (today)' : ''}`, r.sleep == null ? '' : sleepText(r.sleep), r.steps == null ? '' : stepsText(r.steps, false),
-      r.meals == null ? '' : r.meals, drinksShort(r.drinks),
-      { html: r.symptoms.map(s => `<span class="rp-sym sev-${s.severity || 0}">${esc(T(s.name))} <span class="rp-muted">${esc(s.severity ? sevShort(s.severity) : 'no severity')}</span></span>`).join('') },
-      r.notes ? 'Yes' : ''] }));
-    // A doctor reads symptom days only (all days with "Full daily details" or a short period).
-    const details = dl.details.filter(d => dl.detailMode === 'all' || d.symptomDay).map(d => {
+      { text: `${Dday(r.date)}${r.partial ? ' (today)' : ''}`, cls: 'rp-nowrap' }, r.sleep == null ? '' : sleepText(r.sleep), r.steps == null ? '' : stepsText(r.steps, false),
+      drinkSummary(r.drinks),
+      { html: r.symptoms.map(x => `<span class="rp-sym sev-${x.severity || 0}">${esc(T(x.name, r.date))} <span class="rp-muted">${esc([x.severity ? sevShort(x.severity) : 'no severity', describeWhen(x)].filter(Boolean).join(', '))}</span></span>`).join('') },
+      { text: truncate(T(r.notes, r.date), 80), cls: 'rp-notes' }] }));
+    // Day details for a doctor only with "All days" (or a short period); the table has the notes.
+    const details = dl.details.filter(d => dl.detailMode === 'all').map(d => {
       const ls = dayLines(d, h, { short: true });
       if (!ls.length) return '';
       return `<li class="rp-day${d.symptomDay ? ' is-symptom' : ''}"><p class="rp-day-date">${esc(Dday(d.date))}${d.partial ? ' (today, partial)' : ''}</p><ul>${ls.map(l => {
@@ -232,9 +235,9 @@ export function toHtml(model, opts = {}) {
         return `<li><span class="rp-k">${esc(l.slice(0, i))}</span> ${esc(l.slice(i + 2))}</li>`;
       }).join('')}</ul></li>`;
     }).join('');
-    return section('daily', 'Daily log', `${table(['Day', 'Sleep', 'Steps', 'Meals', 'Drinks', 'Symptoms', 'Notes'], rows, { numeric: [1, 2, 3], caption: 'Daily log', cls: 'rp-compact rp-daily' })}
+    return section('daily', 'Daily log', `${table(['Day', 'Sleep', 'Steps', 'Drinks', 'Symptoms', 'Notes'], rows, { numeric: [1, 2], caption: 'Daily log', cls: 'rp-compact rp-daily' })}
       ${details ? `<h3>${esc(dl.detailMode === 'all' ? 'Details of each day' : 'Symptom days')}</h3><ul class="rp-days">${details}</ul>` : ''}`,
-    'Drinks: water/coffee/alcohol ("–" = not recorded). Sleep is the night before.');
+    `${TABLE_TEXT[dl.tableMode]} Sleep is the night before.`);
   }
 }
 

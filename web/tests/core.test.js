@@ -144,6 +144,12 @@ test('catalog: changes from two devices are merged', async () => {
   // c_aa: only I renamed it → mine. c_bb: they deleted it, I did not change it → deleted. c_cc: they added it.
   assert.deepEqual(r.measurements.map(x => [x.id, x.name]), [['c_aa', 'Back pain'], ['c_cc', 'SpO2']]);
   assert.deepEqual(r.counters.map(x => x.id), ['c_tea']);
+  // Both changed the same item: I renamed it, they hid it → both changes stay.
+  const b2 = { measurements: [m('c_aa', 'Pain')] };
+  const r2 = S.mergeCatalog(b2, { measurements: [m('c_aa', 'Back pain')] }, { measurements: [m('c_aa', 'Pain', { hidden: true })] });
+  assert.deepEqual([r2.measurements[0].name, r2.measurements[0].hidden], ['Back pain', true]);
+  // They deleted it, I changed it → my change stays.
+  assert.equal(S.mergeCatalog(b2, { measurements: [m('c_aa', 'Back pain')] }, { measurements: [] }).measurements.length, 1);
   // Nothing changed on my side → their version.
   assert.deepEqual(S.mergeCatalog(base, base, theirs).symptoms, ['Fatigue', 'Nausea']);
 });

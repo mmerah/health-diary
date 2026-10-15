@@ -381,3 +381,39 @@ test('a city next to a postcode is hidden with it', () => {
   assert.equal(rr.text('Bahnhofstrasse 12, 8001 Zürich'), '[address], [address]');
   assert.ok(!rr.text('10 Downing Street, London SW1A 2AA').includes('London'));
 });
+
+// ---------- German and Italian dates, more institutions
+
+test('German and Italian month names and birth cues', () => {
+  const rr = makeRedactor({ profile: { dob: '1975-03-02' }, relativeTo: '2026-10-15' });
+  const T4 = (s, ref) => rr.text(s, { ref });
+  assert.equal(T4('geb. 2. März 1975'), 'geb. [date of birth]');
+  assert.equal(T4('Geburtsdatum: 2. März 1975'), 'Geburtsdatum: [date of birth]');
+  assert.equal(T4('Geb.-Datum: 02.März.1975'), 'Geb.-Datum: [date of birth]');
+  assert.equal(T4('2 Maerz 1975'), '[date of birth]');
+  assert.equal(T4('Geburtstag 2. März'), 'Geburtstag [date of birth]');
+  assert.equal(T4('geb. 1975'), 'geb. [year of birth]');
+  assert.equal(T4('geboren 1975'), 'geboren [year of birth]');
+  assert.equal(T4('nato il 2 marzo 1975'), 'nato il [date of birth]');
+  assert.equal(T4('nata nel 1975'), 'nata nel [year of birth]');
+  assert.equal(T4('am 5. März 2026'), 'am D-224');
+  assert.equal(T4('am 5 Mrz. 2026'), 'am D-224');
+  assert.equal(T4('3. Jänner 2026'), 'D-285');
+  assert.equal(T4('Kontrolle am 12. Dez. 2026'), 'Kontrolle am D+58');
+  assert.equal(T4('Termin 3. Okt.', '2026-10-14'), 'Termin D-12');
+  assert.equal(T4('il 5 settembre 2026'), 'il D-40');
+  assert.equal(T4('visita del 12 gennaio 2026'), 'visita del D-276');
+  // Words that are also short month names stay.
+  for (const s of ['3 ago', 'Dosis 2 set', 'Kreatinin 85 µmol/L (59 – 104)', '2. Messung normal']) assert.equal(T4(s), s, s);
+});
+
+test('institutions: -praxis names, a name before the word, hospital acronyms', () => {
+  const rr = makeRedactor({ relativeTo: '2026-10-15' });
+  for (const s of ['HUG', 'CHUV', 'USZ', 'KSSG', 'LUKS', 'Inselspital', 'AP-HP', 'Charité', 'Gemeinschaftspraxis Huber & Meier', 'Hausarztpraxis Dr. Keller',
+    'Facharztpraxis Weber und Partner', 'Hirslanden Klinik Im Park', 'Bethanien Spital', 'Lindenhof Spital']) assert.equal(rr.text(s), '[hospital]', s);
+  assert.equal(rr.text('Überweisung an das CHUV, Lausanne'), 'Überweisung an das [hospital], Lausanne');
+  // Medical words and plain uses stay.
+  for (const s of ['Hausarztpraxis', 'in der Praxis', 'Praxisgebühr', 'Die Klinik war gut', 'Psychiatrische Klinik', 'CH-Wert', 'BACHUG', 'HUGE']) {
+    assert.equal(rr.text(s), s, s);
+  }
+});

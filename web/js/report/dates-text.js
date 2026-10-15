@@ -5,8 +5,8 @@
 // Forms that are found:
 //   ISO and year first: 2026-03-14, 2026/03/14, 2026.03.14
 //   Numbers, day first: 14/03/1991, 14.3.1991, 14-03-1991, 14/03/91
-//   Month names (English and French, full or short): 14 March 1991, 14th of March 1991, 1er mars 2026,
-//     3 février 2026, 14-Mar-1991, March 14, 1991, Mar 14 1991
+//   Month names (English, French, German, Italian, full or short): 14 March 1991, 14th of March 1991, 1er mars 2026,
+//     3 février 2026, 2. März 1975, 02.März.1975, 2 marzo 1975, 14-Mar-1991, March 14, 1991, Mar 14 1991
 //   Without a year: "14 March", "the 3rd of October", "March 14", "le 3/10", "05/10 to 09/10",
 //     "du 1er au 3 octobre". The year comes from the reference date (the date of the document):
 //     the nearest date on or before it. `inferred` is true for these.
@@ -28,12 +28,17 @@ const MONTHS = {
   oct: 10, october: 10, octobre: 10,
   nov: 11, november: 11, novembre: 11,
   dec: 12, december: 12, decembre: 12,
+  // German (also Austrian forms)
+  januar: 1, janner: 1, februar: 2, feber: 2, marz: 3, maerz: 3, mrz: 3, juni: 6, juli: 7, oktober: 10, okt: 10, dezember: 12, dez: 12,
+  // Italian
+  gennaio: 1, gen: 1, febbraio: 2, marzo: 3, aprile: 4, maggio: 5, mag: 5, giugno: 6, giu: 6, luglio: 7, lug: 7,
+  agosto: 8, ago: 8, settembre: 9, set: 9, ottobre: 10, ott: 10, dicembre: 12, dic: 12,
 };
 const WEEKDAYS = new Set(['mon', 'monday', 'tue', 'tues', 'tuesday', 'wed', 'wednesday', 'thu', 'thur', 'thurs', 'thursday',
   'fri', 'friday', 'sat', 'saturday', 'sun', 'sunday', 'lun', 'lundi', 'mardi', 'mer', 'mercredi', 'jeu', 'jeudi',
   'ven', 'vendredi', 'sam', 'samedi', 'dim', 'dimanche']);
 // Month words that are also common words: without a year they count only when capitalised ("May 3", not "may 3").
-const AMBIGUOUS = new Set(['may', 'mar']);
+const AMBIGUOUS = new Set(['may', 'mar', 'ago', 'set', 'gen', 'mag']);
 
 const monthOf = w => MONTHS[fold(w).replace(/\.$/, '')] || null;
 
@@ -66,7 +71,10 @@ function inferYear(m, d, ref) {
 const NB = String.raw`(?<![\p{N}.,/\-])`;
 const NA = String.raw`(?![\p{N}]|[.,/\-]\p{N})`;
 const MONTH_WORD = String.raw`(\p{L}{3,9})\.?`;
-const DAY = String.raw`(\d{1,2})(?:st|nd|rd|th|er|re|e)?`;
+const DAY = String.raw`(\d{1,2})(?:st|nd|rd|th|er|re|e|\.)?`;
+// Between day and month: spaces or a dash, or nothing after a dot ("02.März").
+const DM_SEP = String.raw`(?:[\s\-]+|(?<=\.)\s*)`;
+const YEAR_SEP = String.raw`(?:[\s,\-]+|(?<=\.))`;
 const OF = String.raw`(?:\s+of)?`;
 const TO = String.raw`\s*(?:au|à|to|until|till|-|–|—|and|et)\s*`;
 // Words that show that a day/month pair without a year is a date ("le 3/10"), not a score ("pain 3/10").
@@ -80,9 +88,9 @@ const PATTERNS = [
   // Day and month in numbers, no year: "le 3/10", "05/10". Only with a date word before it or a leading zero.
   { re: new RegExp(String.raw`${NB}(\d{1,2})/(\d{1,2})${NA}`, 'gu'), parts: m => [null, m[2], m[1]], kind: 'dm' },
   // A range of days in one month: "du 1er au 3 octobre 2026", "1-3 March" → two dates.
-  { re: new RegExp(String.raw`(?<![\p{L}\p{N}])${DAY}${TO}${DAY}${OF}[\s\-]+${MONTH_WORD}(?:[\s,\-]+(\d{4}))?(?![\p{L}\p{N}])`, 'giud'), kind: 'range' },
+  { re: new RegExp(String.raw`(?<![\p{L}\p{N}])${DAY}${TO}${DAY}${OF}${DM_SEP}${MONTH_WORD}(?:${YEAR_SEP}(\d{4}))?(?![\p{L}\p{N}])`, 'giud'), kind: 'range' },
   // 14 March 1991, 14th of March 1991, 14-Mar-1991, 1er mars 2026, 14 March (no year)
-  { re: new RegExp(String.raw`(?<![\p{L}\p{N}])${DAY}${OF}[\s\-]+${MONTH_WORD}(?:[\s,\-]+(\d{4}))?(?![\p{L}\p{N}])`, 'giu'), parts: m => [m[3], m[2], m[1]], kind: 'text' },
+  { re: new RegExp(String.raw`(?<![\p{L}\p{N}])${DAY}${OF}${DM_SEP}${MONTH_WORD}(?:${YEAR_SEP}(\d{4}))?(?![\p{L}\p{N}])`, 'giu'), parts: m => [m[3], m[2], m[1]], kind: 'text' },
   // March 14, 1991 / Mar 14 1991 / March 14 (no year: capitalised month only)
   { re: new RegExp(String.raw`(?<![\p{L}\p{N}])${MONTH_WORD}\s+(?:the\s+)?${DAY}(?:,?\s+(\d{4}))?(?![\p{L}\p{N}]|\s*(?:mg|g|ml|mL|%|x|×|h|min|times|fois)\b)`, 'gu'), parts: m => [m[3], m[1], m[2]], kind: 'text-md' },
   // Month and year: "octobre 2026", "March 2024"

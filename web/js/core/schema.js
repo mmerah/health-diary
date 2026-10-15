@@ -330,7 +330,17 @@ function mergeNames(base, mine, theirs) {
   return [...mine.filter(x => !removed.includes(x)), ...added];
 }
 
-/** Items with ids: per item, the side that changed it wins; when both changed it, mine wins. */
+/** One item changed on both sides: per field, the side that changed it wins; on the same field, mine wins. */
+function mergeFields(b, m, t) {
+  const out = { ...t };
+  for (const k of new Set([...Object.keys(m), ...Object.keys(t)])) {
+    if (!same(m[k], b[k])) out[k] = m[k];
+  }
+  return out;
+}
+
+/** Items with ids: an item changed on one side takes that side; changed on both sides, fields are merged.
+    A delete wins over "no change"; a change wins over a delete on the other side. */
 function mergeItems(base, mine, theirs) {
   const byId = list => new Map(list.map(x => [x.id, x]));
   const b = byId(base), m = byId(mine), t = byId(theirs);
@@ -338,7 +348,11 @@ function mergeItems(base, mine, theirs) {
   const out = [];
   for (const id of new Set([...order, ...b.keys()])) {
     const bi = b.get(id), mi = m.get(id), ti = t.get(id);
-    const pick = same(mi, bi) ? ti : mi; // undefined = deleted on that side
+    let pick;
+    if (same(mi, bi)) pick = ti;                 // I did not change it: theirs (or their delete)
+    else if (same(ti, bi)) pick = mi;            // they did not change it: mine (or my delete)
+    else if (mi && ti) pick = bi ? mergeFields(bi, mi, ti) : mi; // both changed it
+    else pick = mi || ti;                        // one side deleted, the other changed: keep the change
     if (pick) out.push(pick);
   }
   return out;

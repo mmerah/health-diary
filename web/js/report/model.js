@@ -240,10 +240,10 @@ export function computeFlags(m) {
   const inc = m.include || {};
   const { bp, temp, weight } = m.measurements;
   if (inc.measurements !== false) { addMeasurementFlags(f, bp, temp, weight); addCustomFlags(f, m.measurements); }
-  // With little data there are no symptom key points: they would only be noise.
-  if (inc.symptoms !== false && !m.lowData) {
+  // Trends need enough data; the count of severe days does not.
+  if (inc.symptoms !== false) {
     for (const s of m.symptoms) {
-      if (s.trend === 'new' || s.trend === 'more' || s.trend === 'worse') f.push({ kind: `symptom-${s.trend}`, level: 'caution', symptom: s });
+      if (!m.lowData && (s.trend === 'new' || s.trend === 'more' || s.trend === 'worse')) f.push({ kind: `symptom-${s.trend}`, level: 'caution', symptom: s });
       if (s.severeDates.length >= 2) f.push({ kind: 'symptom-severe', level: 'info', symptom: s });
     }
   }

@@ -289,7 +289,7 @@ test('few diary days: no symptom key points, no "0 of 0 diary days"', () => {
   const d = data({ days: allDays().filter(x => keep.includes(x.date)) });
   const model = buildReportModel(d, { from: addDays(TO, -89), to: TO, audience: 'ai' });
   assert.ok(model.lowData);
-  assert.ok(!model.flags.some(f => f.kind.startsWith('symptom-')));
+  assert.ok(!model.flags.some(f => ['symptom-new', 'symptom-more', 'symptom-worse'].includes(f.kind)), 'no trend key points');
   const md = toMarkdown(model, { redactor: makeRedactor({ profile: db.profile, relativeTo: TO }), relative: true });
   assert.ok(!md.includes('0 of 0') && !md.includes('New in the second half'));
   assert.match(md, /Trend: too few diary days to compare/);
@@ -298,4 +298,19 @@ test('few diary days: no symptom key points, no "0 of 0 diary days"', () => {
 test('the AI text says that most personal details are removed, not all', () => {
   const { md } = aiReport();
   assert.match(md, /Most personal details are removed/);
+});
+
+test('few diary days: the count of severe days stays, trend key points go', () => {
+  const sev = allDays().filter(x => x.log && x.log.symptoms && x.log.symptoms.length).slice(-6)
+    .map(x => ({ ...x, log: { ...x.log, symptoms: [{ name: 'Migraine', severity: 3 }] } }));
+  const model = buildReportModel(data({ days: sev }), { from: addDays(TO, -89), to: TO, audience: 'doctor' });
+  assert.ok(model.lowData);
+  assert.ok(model.flags.some(f => f.kind === 'symptom-severe'), 'severe on N days is a count, not a trend');
+  assert.ok(!model.flags.some(f => ['symptom-new', 'symptom-more', 'symptom-worse'].includes(f.kind)));
+});
+
+test('surgeries with years stay readable in the AI report', () => {
+  const d = data({ profile: { ...db.profile, surgeries: '2019 Appendektomie\n2021 Knie-OP' } });
+  const { md } = aiReport({}, d);
+  assert.match(md, /Surgeries and hospital stays: 2019 Appendektomie; 2021 Knie-OP/);
 });

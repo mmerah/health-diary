@@ -488,3 +488,21 @@ def test_admin_who_resets_their_own_password_stays_logged_in(c):
     assert other.get("/api/profile").status_code == 401  # other devices are logged out
     assert c.get("/api/auth/status").json()["user"]["notice"] is None
     c.put(f"/api/users/{me}/password", json={"password": PW})
+
+
+def test_a_newer_version_still_in_the_wal_file_is_refused(tmp_path, monkeypatch):
+    for name, value in (("DATA_DIR", tmp_path), ("DB_PATH", tmp_path / "diary.db"), ("TMP_DIR", tmp_path / "tmp")):
+        monkeypatch.setattr(db, name, value)
+    db.init()
+    writer = sqlite3.connect(tmp_path / "diary.db")
+    try:
+        writer.execute("PRAGMA wal_autocheckpoint = 0")  # the change stays in the WAL file
+        writer.execute("PRAGMA user_version = 99")
+        writer.commit()
+        header = (tmp_path / "diary.db").read_bytes()[60:64]
+        assert int.from_bytes(header, "big") == 5  # the header check alone would pass
+        db.check_version()
+        with pytest.raises(db.DataFolderError, match="newer version"):
+            db.init()
+    finally:
+        writer.close()

@@ -173,7 +173,10 @@ def check_version():
         header = f.read(100)
     if len(header) < 100 or not header.startswith(b"SQLite format 3\0"):
         return  # empty or not SQLite: SQLite itself reports it at start
-    version = int.from_bytes(header[60:64], "big")
+    _refuse(int.from_bytes(header[60:64], "big"))
+
+
+def _refuse(version):
     if 1 <= version < BASE_VERSION:
         raise DataFolderError("This data folder is from Health Diary 0.1. Version 0.2 cannot use it. "
                               "Stop the app, move the data folder away, then start again with an empty folder.")
@@ -183,6 +186,10 @@ def check_version():
 
 def init():
     check_version()  # first: a refused folder stays exactly as it is
+    if DB_PATH.exists():
+        # The header can be old while a newer user_version is still in the WAL file: ask SQLite too.
+        with connect() as c:
+            _refuse(c.execute("PRAGMA user_version").fetchone()[0])
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     TMP_DIR.mkdir(mode=0o700, exist_ok=True)
     for p in (DATA_DIR, TMP_DIR):

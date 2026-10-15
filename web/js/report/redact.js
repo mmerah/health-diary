@@ -118,7 +118,7 @@ const CREDENTIAL_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}(${TOK}(?:[ \t]+(?
 const NAME_LINE_RE = new RegExp(String.raw`^([ \t]*)(${TOK}(?:[ \t]+(?:${PART}[ \t]+){0,2}${TOK}){1,3})([ \t]*)$`, 'gmu');
 
 // Header labels: the name tokens after them are hidden (not the rest of the line: "Patient: 35 y/o male …" stays).
-const HEADER_NAME_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}((?:Patient(?:e)?(?:\s+name)?|PATIENT|Nom(?:\s+de\s+naissance|\s+d'usage|\s+et\s+prénom|\s+de\s+jeune\s+fille)?|NOM|Prénom|PRENOM|PRÉNOM|Name|NAME|Full\s+name|Surname|First\s+name|Last\s+name|Given\s+name|Assuré(?:e)?|Insured|Bénéficiaire)[ \t]*:[ \t]*)(${NAME}(?:[ \t]*,[ \t]*${NAME}(?=[ \t]*(?:$|[,;(\n–-]|\uE000)))?)`, 'gmu');
+const HEADER_NAME_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}((?:Patient(?:e)?(?:\s+name)?|PATIENT|Nom(?:\s+de\s+naissance|\s+d'usage|\s+et\s+prénom|\s+de\s+jeune\s+fille)?|NOM|Prénom|PRENOM|PRÉNOM|Name|NAME|Full\s+name|Surname|First\s+name|Last\s+name|Given\s+name|Assuré(?:e)?|Insured|Bénéficiaire)[ \t]*:[ \t]*)(${NAME}(?:[ \t]*,[ \t]*${NAME}(?=[ \t]*(?:$|[,;(\n–-]|)|[ \t]+(?:\p{Lu}[\p{Lu}.]+|Date|Born|Age|Sex|Geb\.?)[ \t]*[:.]))?)`, 'gmu');
 const ADDRESS_LABEL_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}((?:Adresse|ADRESSE|Address|ADDRESS|Domicile)[ \t]*:)[^\n]*`, 'gu');
 const BIRTH_LABEL = String.raw`(?:born|Born|BORN|n[ée]e?(?:\(e\))?\s+le|N[ée]e?(?:\(e\))?\s+le|NÉ(?:\(E\))?\s+LE|DOB|D\.O\.B\.?|[Dd]ate\s+of\s+birth|[Dd]ate\s+de\s+naissance|DATE\s+DE\s+NAISSANCE|[Bb]irth\s*date|[Bb]irthday|[Aa]nniversaire|[Gg]eboren)`;
 const BIRTH_BEFORE_RE = new RegExp(String.raw`${BIRTH_LABEL}\s*(?:on|in|le|en|:)?\s*$`, 'u');
@@ -143,13 +143,15 @@ const ADDRESS_NUM_RE = new RegExp(String.raw`(?<![\p{L}\p{N}.,])\d{1,4}(?:[ \t]?
 // Lower-case street words count only before a capitalised name: "1 place Alexis Ricordeau", not "3 cours de yoga".
 const ADDRESS_LOWER_RE = /(?<![\p{L}\p{N}.,])\d{1,4}(?:[ \t]?(?:bis|ter))?,?[ \t]+(?:place|route|cours|square|passage|voie|esplanade|rond-point|lieu-dit|hameau|résidence|lotissement|street|road|lane|drive|way|court|close)[ \t]+(?:(?:de|du|des|de la|d'|l'|la|le|of|the)[ \t]*)?\p{Lu}[^\n,;]*/gu;
 const ADDRESS_STREET_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}(?:rue|Rue|RUE|avenue|Avenue|boulevard|Boulevard|allée|Allée|impasse|Impasse|chemin|Chemin|quai|Quai|faubourg|Faubourg)[ \t]+(?:(?:de|du|des|de la|d'|l'|la|le)[ \t]*)?\p{Lu}[^\n,;]*`, 'gu');
-// German and Swiss streets: "Bahnhofstrasse 12", "Hauptstraße 5", "Lindenweg 3a".
-const STREET_DE_RE = /(?<![\p{L}\p{N}])\p{Lu}[\p{L}\-]*(?:strasse|straße|str\.|gasse|weg|platz|allee|ring|damm|ufer|graben|steig|matte)[ \t]+\d{1,4}[a-zA-Z]?(?![\p{L}\p{N}])/gu;
-// Swiss, Austrian and German postcodes with the city: "1204 Genève", "CH-8001 Zürich", "1010 Wien".
-// 4 digits only at the start of a line, after a comma or with a country prefix, so that "2024 Holter" stays.
-const POSTCODE_4_RE = /(?:(?<=^|,[ \t]*)|(?:CH|A|AT|D|DE)-)\d{4}[ \t]+\p{Lu}[\p{L}'’\-]+(?:[ \t]+(?:am|an|bei|im|sur|\p{Lu}[\p{L}'’\-]*))*(?=[ \t]*(?:$|[,;\n]))/gmu;
+// German and Swiss streets: "Bahnhofstrasse 12", "Hauptstraße 5", "Lindenweg 3a". The ending must close the word,
+// and a house number must follow (not a unit: "Seeufer 3 km", "Monitoring 48 Stunden" stay).
+const STREET_DE_RE = /(?<![\p{L}\p{N}])\p{Lu}[\p{L}\-]*(?:strasse|straße|str\.|gasse|weg|platz|allee)[ \t]+\d{1,4}[a-zA-Z]?(?![\p{L}\p{N}]|[.,]\p{N}|[ \t]*(?:km|m|cm|mm|h|min|mg|g|kg|ml|mL|l|L|%|x|×|Std|Stunden|Tage|Mal)\b)/gu;
+// Swiss, Austrian and German 4-digit postcodes with the city, only in an address: with a country prefix
+// ("CH-8001 Zürich") or right after a street that was found ("Bahnhofstrasse 12, 8001 Zürich").
+// A year at the start of a line ("2019 Appendektomie") is never a postcode.
+const POSTCODE_4_RE = /(?:(?:CH|A|AT|D|DE|F)-\d{4}|(?<=\[address\],?[ \t]*)\d{4})[ \t]+\p{Lu}[\p{L}'’\-]+(?:[ \t]+(?:am|an|bei|im|sur|\p{Lu}[\p{L}'’\-]*))*(?=[ \t]*(?:$|[,;\n]))/gmu;
 const PO_BOX_RE = /(?<![\p{L}\p{N}])(?:P\.?[ \t]?O\.?[ \t]?Box|PO[ \t]?BOX|Bo[îi]te[ \t]+postale|B\.P\.|CS|TSA)[ \t]*\d+/gu;
-const POSTCODE_FR_RE = new RegExp(String.raw`(?<![\p{L}\p{N}.,])(?:F-|FR-)?\d{5}[ \t]+\p{Lu}[\p{L}'’\-]+(?:[ \t\-]+(?:CEDEX(?:[ \t]+\d{1,2})?|sur|sous|en|lès|les|de|du|la|le|\p{Lu}[\p{L}'’\-]*))*`, 'gu');
+const POSTCODE_FR_RE = new RegExp(String.raw`(?<![\p{L}\p{N}.,])(?:F-|FR-|D-|DE-|A-|AT-|CH-)?\d{5}[ \t]+\p{Lu}[\p{L}'’\-]+(?:[ \t\-]+(?:CEDEX(?:[ \t]+\d{1,2})?|sur|sous|en|lès|les|de|du|la|le|\p{Lu}[\p{L}'’\-]*))*`, 'gu');
 const POSTCODE_UK_RE = /(?<![\p{L}\p{N}])[A-Z]{1,2}\d[A-Z\d]?[ \t]*\d[A-Z]{2}(?![\p{L}\p{N}])/gu;
 const ZIP_US_RE = /(?<![\p{L}\p{N}])(?:\p{Lu}[\p{L}.\-]*(?:[ \t]\p{Lu}[\p{L}.\-]*)*,[ \t]*)?[A-Z]{2}[ \t]+\d{5}(?:-\d{4})?(?![\p{N}])/gu;
 
@@ -284,7 +286,8 @@ export function makeRedactor({ profile = {}, words = [], correspondents = [], re
     // The titles stay, the degrees and the name go: "Prof. Dr. med. Thomas Müller" → "Prof. Dr. [name]".
     t = t.replace(TITLE_RE, (m, title, dot, more) => (title === 'M' && !dot && !more ? m
       : `${title}${dot}${(more.match(new RegExp(String.raw`[ \t]+(?:${TITLE_WORDS})\.?`, 'gu')) || []).join('')} [name]`));
-    t = t.replace(CUE_RE, (m, cue, sp, name) => (/^(?:Re|RE|Pt|To|From|De|À|Pour|Cc|GP|Patient)$/.test(cue) && !/:/.test(sp) && !/^\[name\]/.test(name) && !/[ \t]/.test(name.trim())
+    t = t.replace(CUE_RE, (m, cue, sp, name, at, str) => (/^\[name\]/.test(name) && /^[ \t]*:/.test(str.slice(at + m.length)) ? m // "[name]   DOB:" — a label, not a name
+      : /^(?:Re|RE|Pt|To|From|De|À|Pour|Cc|GP|Patient)$/.test(cue) && !/:/.test(sp) && !/^\[name\]/.test(name) && !/[ \t]/.test(name.trim())
       ? m : `${cue}${sp || ' '}[name]`));
     t = t.replace(CREDENTIAL_RE, (m, name, cred) => `[name]${cred}`);
     t = t.replace(NAME_LINE_RE, (m, lead, name, trail) => {

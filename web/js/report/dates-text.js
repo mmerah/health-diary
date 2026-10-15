@@ -155,16 +155,14 @@ export function findDates(text, { nowYear, ref = null } = {}) {
       if (p.kind === 'dmy' || p.kind === 'dm') {
         // Dot and dash dates (14.03.2026, 14-03-2026) are always day first.
         // Slash dates are day first too (most users and documents are European; the server reads them the same way).
-        // Month first only when day first is impossible (03/14/1991), or when day first would be after the
-        // document date and month first would not. The other reading is kept in `alt` (for the date of birth).
+        // Month first only when day first is impossible (03/14/1991). Future dates stay as read: appointments are
+        // in the future. The other reading is kept in `alt` (for the date of birth).
         const slash = p.kind === 'dm' || m[2] === '/';
         const yy = y ? fullYear(y, year) : null;
         if (slash && mo > 12 && d <= 12) [mo, d] = [d, mo];
         else if (slash && mo <= 12 && d <= 12 && mo !== d && valid(yy, d, mo)) {
           const iy = (mm, dd) => (yy || (ref ? inferYear(mm, dd, ref) : null));
-          const dayFirst = iy(mo, d) ? isoOf(iy(mo, d), mo, d) : null;
-          const monthFirst = iy(d, mo) ? isoOf(iy(d, mo), d, mo) : null;
-          if (ref && dayFirst && monthFirst && dayFirst > ref && monthFirst <= ref) { [mo, d] = [d, mo]; alt = dayFirst; } else alt = monthFirst;
+          alt = iy(d, mo) ? isoOf(iy(d, mo), d, mo) : null;
         } else if (!slash && mo <= 12 && d <= 12 && mo !== d && valid(yy, d, mo)) {
           alt = yy ? isoOf(yy, d, mo) : null;
         }

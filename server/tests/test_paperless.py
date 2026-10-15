@@ -103,3 +103,39 @@ def test_tags_are_per_user(c, fake):
     jon = login("jon")
     assert jon.get("/api/me/paperless").json()["tags"] == ["medical"]
     assert c.get("/api/me/paperless").json()["tags"] == ["lab"]
+
+
+def test_page_links_from_the_public_host(c, monkeypatch):
+    """Behind a proxy, Paperless writes page links with its public host. The diary asks the same
+    page on PAPERLESS_URL. A link to another path is not followed: the list is partial, and the
+    token never goes to another host."""
+    base = "http://10.0.0.5:8000"
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        path, page = request.url.path, request.url.params.get("page", "1")
+        if path == "/api/tags/":
+            return httpx.Response(200, json={"results": [{"id": 1, "name": "medical", "document_count": 3}],
+                                             "next": None})
+        if path == "/api/documents/":
+            nxt = {"1": "https://paperless.example.com/api/documents/?page=2&tags__id__in=1",
+                   "2": "https://evil.example.com/steal?page=3"}.get(page)
+            return httpx.Response(200, json={"results": [{"id": int(page) * 10, "title": f"Doc {page}",
+                                                          "created": "2026-01-0" + page, "content": ""}],
+                                             "next": nxt})
+        return httpx.Response(200, json={"results": [], "next": None})
+
+    monkeypatch.setattr(paperless, "URL", base)
+    monkeypatch.setattr(paperless, "_client", lambda token: httpx.Client(
+        transport=httpx.MockTransport(handler), headers={"Authorization": f"Token {token}"}))
+    paperless._cache.clear()
+    paperless._tags.clear()
+    c.put("/api/me/paperless", json={"token": "good-token", "tags": ["medical"]})
+    r = c.get("/api/documents").json()
+    assert [d["id"] for d in r["documents"] if d["source"] == "paperless"] == [20, 10]  # pages 1 and 2
+    assert r["paperless"] == {"ok": False, "error": "Paperless gave only part of the list. Check PAPERLESS_URL."}
+    assert all(req.url.host == "10.0.0.5" for req in requests)
+    page2 = [req for req in requests if req.url.params.get("page") == "2"][0]
+    assert str(page2.url) == f"{base}/api/documents/?page=2&tags__id__in=1"
+    assert page2.headers["authorization"] == "Token good-token"

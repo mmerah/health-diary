@@ -256,7 +256,7 @@ test('dates without a year take the year of the document and become day numbers'
 });
 
 test('ambiguous slash dates: the reading nearest the document date', () => {
-  assert.equal(R2('Visit on 03/04/2026', '2026-03-06'), 'Visit on D-225', 'US letter: 4 March');
+  assert.equal(R2('Visit on 03/04/2026', '2026-03-06'), 'Visit on D-195', 'day first, also when it is after the document date');
   assert.equal(R2('Visit on 03/04/2026', '2026-04-05'), 'Visit on D-195', 'European: 3 April');
   assert.equal(R2('DOB 03/14/1991'), 'DOB [date of birth]');
   const us = makeRedactor({ profile: { dob: '1991-03-04' }, relativeTo: '2026-10-15' });
@@ -308,11 +308,10 @@ test('European dates: dot and dash dates are day first; slash dates day first un
   assert.equal(rr.text('11/12/2026', { ref: '2026-12-20' }), 'D+57', 'day first when both readings are in the past');
   assert.equal(rr.text('03/14/2026', { ref: '2026-10-15' }), 'D-215', 'month first only when day first is impossible');
   assert.equal(rr.text('12.31.2026', { ref: '2026-10-15' }), '12.31.2026', 'a dot date is never read month first');
-  assert.equal(rr.text('03/04/2026', { ref: '2026-03-06' }), 'D-225', 'day first (3 April) would be after the document: 4 March');
-  for (const ref of ['2026-10-15', '2026-04-01', '2026-12-31']) {
-    const f = findDates('12/03/2026', { ref })[0];
-    assert.ok(f.iso <= ref || f.alt > ref, `never a future reading when the other is not (${ref} → ${f.iso})`);
-  }
+  // Future dates are not flipped: appointments are in the future.
+  assert.equal(rr.text('RDV le 09/12/2026', { ref: '2026-10-15' }), 'RDV le D+55');
+  assert.equal(rr.text('03/04/2026', { ref: '2026-03-06' }), 'D-195');
+  for (const ref of ['2026-10-15', '2026-04-01', '2026-12-31']) assert.equal(findDates('12/03/2026', { ref })[0].iso, '2026-03-12', ref);
 });
 
 test('Swiss and German details', () => {
@@ -320,10 +319,12 @@ test('Swiss and German details', () => {
   const T2 = s => rr.text(s);
   assert.equal(T2('AHV-Nr. 756.1234.5678.97'), 'AHV-Nr. [id]');
   assert.equal(T2('756 1234 5678 97'), '[id]');
-  for (const s of ['1204 Genève', '8001 Zürich', 'CH-8001 Zürich', '10115 Berlin', '1010 Wien', 'Bahnhofstrasse 12', 'Hauptstraße 5', 'Rue du Rhône 42']) {
+  for (const s of ['CH-1204 Genève', 'CH-8001 Zürich', 'A-1010 Wien', 'D-10115 Berlin', '10115 Berlin', 'Bahnhofstrasse 12', 'Hauptstraße 5', 'Kaiserweg 4b', 'Rue du Rhône 42']) {
     assert.equal(T2(s), '[address]', s);
   }
   assert.equal(T2('Rue du Rhône 42, 1204 Genève'), '[address], [address]');
+  assert.equal(T2('Bahnhofstrasse 12, 8001 Zürich'), '[address], [address]');
+  assert.equal(T2('Patient: Smith, John   DOB: 01.02.1980'), 'Patient: [name]   DOB: [date of birth]');
   assert.equal(T2('Dr. med. Thomas Müller'), 'Dr. [name]');
   assert.equal(T2('Dr. med. dent. Anna Huber, Zahnärztin'), 'Dr. [name], Zahnärztin');
   assert.equal(T2('Prof. Dr. med. Hans Meier'), 'Prof. Dr. [name]');
@@ -332,4 +333,13 @@ test('Swiss and German details', () => {
   assert.equal(T2('Patient: Bob Stone, 35 y/o male'), 'Patient: [name], 35 y/o male');
   // Years and clinical text stay.
   for (const s of ['Holter 2026', 'In 2024 Echo normal', 'Appendectomy (2009)', 'Kreatinin 85 µmol/L (59 – 104)', 'Leukozyten 6.2 G/l (4.0 – 10.0)']) assert.equal(T2(s), s, s);
+});
+
+test('years, medical words and units are not addresses', () => {
+  const rr = makeRedactor({ relativeTo: '2026-10-15' });
+  for (const s of ['2019 Appendektomie\n2021 Knie-OP', '2019 Appendectomy\n2022 Pneumonia', 'Holter 2024, 2025 Stent', 'Holter-Monitoring 24h: normal',
+    'Monitoring 48 Stunden', '8500 Schritte', 'Seeufer 3 km', '1204 Genève', 'Screening 2024', 'Spaziergang 5 km', 'Gehweg 2 h', '2000 Neuchâtel war schön']) {
+    assert.equal(rr.text(s), s, JSON.stringify(s));
+  }
+  assert.equal(rr.text('Surgeries: 2019 Appendektomie; 2021 Knie-OP'), 'Surgeries: 2019 Appendektomie; 2021 Knie-OP');
 });

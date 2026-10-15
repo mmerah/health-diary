@@ -13,10 +13,7 @@ from fastapi import Depends, HTTPException, Request, Response
 from . import db
 
 COOKIE = "hd_session"
-SESSION_DAYS = int(os.environ.get("SESSION_DAYS", "30"))
-# "auto": Secure cookie when the request came over HTTPS (Tailscale, or a trusted reverse proxy).
-# "true"/"false" force it.
-COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "auto").lower()
+SESSION_DAYS = 30  # a login renews itself while it is used
 MIN_PASSWORD, MAX_PASSWORD = 10, 1024
 
 # scrypt with N=2^15, r=8: about 32 MB of memory and ~0.1 s for each check.
@@ -95,11 +92,6 @@ def new_setup_code():
 
 def _norm_code(s):
     return "".join(ch for ch in str(s or "").upper() if ch.isalnum())
-
-
-def strong_enough(code):
-    """A fixed SETUP_CODE must have at least 16 letters or digits."""
-    return len(_norm_code(code)) >= 16
 
 
 def same_setup_code(given, expected):
@@ -210,8 +202,8 @@ LOGIN_IP = Limiter(30, 15 * 60)
 SETUP_IP = Backoff()
 # Shortcut: 30 sends in 10 minutes per user is far more than a shortcut needs.
 INGEST = Limiter(30, 10 * 60)
-# Documents: 30 uploads per hour per user. Each one is read with OCR, which takes CPU.
-DOC_UPLOAD = Limiter(30, 60 * 60)
+# Documents: 300 uploads per hour per user. Enough to upload an old archive file by file.
+DOC_UPLOAD = Limiter(300, 60 * 60)
 LIMITERS = (LOGIN_USER, LOGIN_IP, SETUP_IP, INGEST, DOC_UPLOAD)
 
 
@@ -254,10 +246,9 @@ def _expiry():
 
 
 def _is_https(request: Request):
-    if COOKIE_SECURE in ("true", "false"):
-        return COOKIE_SECURE == "true"
-    # The scheme includes X-Forwarded-Proto only from a trusted proxy (FORWARDED_ALLOW_IPS).
-    # Tailscale (Docktail, tailscale serve) gives HTTPS on *.ts.net but talks plain HTTP to the container.
+    """Secure cookie when the request came over HTTPS. The scheme includes X-Forwarded-Proto only
+    from a trusted proxy (FORWARDED_ALLOW_IPS). Tailscale (Docktail, tailscale serve) gives HTTPS
+    on *.ts.net but talks plain HTTP to the container."""
     host = request.headers.get("host", "").split(":")[0]
     return request.url.scheme == "https" or host.endswith(".ts.net")
 

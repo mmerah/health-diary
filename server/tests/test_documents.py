@@ -66,9 +66,11 @@ def test_upload_rate_limit(c, monkeypatch):
 
 
 def test_bad_fields_are_refused(c):
-    for fields in ({"date": "2026-02-30"}, {"category": "Dentist"}, {"title": "x" * 201}):
+    for fields in ({"date": "2026-02-30"}, {"title": "x" * 201}):
         r = upload(c, b"%PDF-1.4", **fields)
         assert r.status_code == 400 and "not valid" in r.json()["detail"], fields
+    r = upload(c, b"%PDF-1.4", category="Dentist")
+    assert r.status_code == 400 and "not in your list" in r.json()["detail"]
 
 
 def test_excluded_docs_take_both_id_kinds(c):
@@ -109,7 +111,7 @@ def test_ocr_of_images_and_scans(c, kind):
 @needs_tools
 def test_pdf_page_limit_and_password(c):
     r = upload(c, text_pdf([f"Page {i}" for i in range(documents.MAX_PAGES + 1)]))
-    assert r.status_code == 400 and "more than 50 pages" in r.json()["detail"]
+    assert r.status_code == 400 and f"more than {documents.MAX_PAGES} pages" in r.json()["detail"]
     r = upload(c, password_pdf())
     assert r.status_code == 400 and "password" in r.json()["detail"]
     r = upload(c, b"%PDF-1.4\nnot really a pdf")
@@ -343,3 +345,65 @@ def test_routes_are_registered(c):
               ("/api/documents/{doc_id}", "PATCH"), ("/api/documents/{doc_id}", "DELETE"),
               ("/api/documents/{doc_id}/file", "GET"), ("/api/documents/{doc_id}/retry", "POST")]:
         assert p in paths
+
+
+# ---------- The user's own document types
+
+def test_own_document_types(c, fake_paperless):
+    c.put("/api/catalog", json={"docTypes": {"custom": ["Dentist"], "hidden": ["Imaging"]}})
+    assert c.patch("/api/documents/7", json={"category": "Dentist"}).json()["category"] == "Dentist"
+    assert c.patch("/api/documents/7", json={"category": "Imaging"}).json()["category"] == "Imaging"  # hidden: still valid
+    r = c.patch("/api/documents/7", json={"category": "Optician"})
+    assert r.status_code == 400 and "not in your list" in r.json()["detail"]
+    r = upload(c, b"not a pdf", category="Optician")
+    assert r.status_code == 400 and "not in your list" in r.json()["detail"]
+    # Another user does not have "Dentist".
+    c.post("/api/users", json={"username": "hugo", "password": PW})
+    assert login("hugo").patch("/api/documents/7", json={"category": "Dentist"}).status_code == 400
+
+
+@needs_tools
+def test_upload_with_an_own_type(c):
+    c.put("/api/catalog", json={"docTypes": {"custom": ["Dentist"]}})
+    doc = upload(c, text_pdf(["Dental check"]), category="Dentist").json()
+    assert doc["category"] == "Dentist" and "category" in doc["edited"]
+
+
+# ---------- Encrypted storage in chunks
+
+def test_large_files_are_stored_in_chunks(c, tmp_path, monkeypatch):
+    monkeypatch.setattr(documents, "CHUNK", 1000)
+    uid = c.get("/api/auth/status").json()["user"]["id"]
+    src = tmp_path / "big.bin"
+    data = bytes(range(256)) * 40  # 10 240 bytes: 11 chunks
+    src.write_bytes(data)
+    documents.store_file(uid, 900001, src)
+    stored = documents.file_path(uid, 900001).read_bytes()
+    assert stored.startswith(documents.MAGIC) and data[:100] not in stored
+    assert list(documents.iter_file(uid, 900001)) == [data[i:i + 1000] for i in range(0, len(data), 1000)]
+    # A cut file, or one with an extra chunk, is refused.
+    path = documents.file_path(uid, 900001)
+    path.write_bytes(stored[:-200])
+    with pytest.raises(documents.Damaged):
+        documents.read_file(uid, 900001)
+    path.write_bytes(stored + b"\x00\x00\x00\x05hello")
+    with pytest.raises(documents.Damaged):
+        documents.read_file(uid, 900001)
+    # Chunks in another order are refused.
+    first_len = int.from_bytes(stored[4:8], "big")
+    first = stored[4:8 + first_len]
+    second_len = int.from_bytes(stored[8 + first_len:12 + first_len], "big")
+    second = stored[8 + first_len:12 + first_len + second_len]
+    path.write_bytes(documents.MAGIC + second + first + stored[12 + first_len + second_len:])
+    with pytest.raises(documents.Damaged):
+        documents.read_file(uid, 900001)
+    # Empty files work too.
+    (tmp_path / "empty").write_bytes(b"")
+    documents.store_file(uid, 900002, tmp_path / "empty")
+    assert documents.read_file(uid, 900002) == b""
+    # A file in another format is refused.
+    documents.file_path(uid, 900001).write_bytes(b"%PDF-1.4 not encrypted")
+    with pytest.raises(documents.Damaged):
+        documents.read_file(uid, 900001)
+    documents.remove_file(uid, 900001)
+    documents.remove_file(uid, 900002)

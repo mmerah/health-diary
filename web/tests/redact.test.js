@@ -183,12 +183,14 @@ test('lab values, ranges and clinical numbers survive', () => {
   }
 });
 
-test('categories: only generic medical types are shown', () => {
+test('categories: only the built-in document types are shown in AI mode', () => {
   assert.equal(safeCategory('Blood test'), 'Blood test');
   assert.equal(safeCategory('Cardiology'), 'Cardiology');
-  assert.equal(safeCategory('Imaging / MRI'), 'Imaging / MRI');
+  assert.equal(safeCategory('Imaging'), 'Imaging');
+  // Own types are the user's words and can contain names.
   assert.equal(safeCategory('Dr Petit'), 'Medical document');
-  assert.equal(safeCategory('Clinique Saint-Roch'), 'Medical document');
+  assert.equal(safeCategory('Cardiologie Dupont'), 'Medical document');
+  assert.equal(safeCategory('Imaging / MRI'), 'Medical document');
   assert.equal(safeCategory(''), 'Medical document');
 });
 

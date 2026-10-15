@@ -102,11 +102,13 @@
 .h-d { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .h-d-sleep, .h-d-wide { grid-column: 1 / -1; }
 .h-d dt { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; font-weight: 700; color: var(--muted); }
-.h-d dt svg { width: 16px; height: 16px; }
+.h-d dt svg { width: 16px; height: 16px; color: var(--heart); }
 .h-d-sleep dt svg { color: var(--sleep); }
-.h-d:nth-child(2) dt svg { color: var(--activity); }
-.h-d:nth-child(3) dt svg, .h-d:nth-child(4) dt svg { color: var(--heart); }
-.h-d-wide dt svg { color: var(--activity); }
+.h-d-steps dt svg, .h-d-wide dt svg { color: var(--activity); }
+.h-d-spo2 { grid-column: span 2; }
+.h-mid { font-family: var(--font-data); font-variant-numeric: tabular-nums; font-size: 1.05rem; font-weight: 600; }
+.edit-list { margin-left: auto; }
+.edit-list svg { width: 16px; height: 16px; }
 .h-d dd { margin: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; }
 .h-big { font-family: var(--font-data); font-variant-numeric: tabular-nums; font-size: 1.3rem; font-weight: 600; line-height: 1.2; }
 .h-sub { font-size: 0.85rem; color: var(--muted); }

@@ -9,6 +9,7 @@ Connections run in autocommit mode. `transaction()` groups several statements
 import json
 import logging
 import os
+import shutil
 import sqlite3
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -30,6 +31,13 @@ def configure(data_dir):
 configure(os.environ.get("DATA_DIR", "/data"))
 
 _active = ContextVar("db_transaction", default=None)
+
+
+def room():
+    """Bytes that uploads may still use: the free space of the data disk, minus a reserve of
+    1 GB or 10% of the disk (the larger). The database must never fill the disk."""
+    usage = shutil.disk_usage(DATA_DIR)
+    return usage.free - max(1024 ** 3, usage.total // 10)
 
 
 def _open():
@@ -77,34 +85,40 @@ def transaction():
 
 # ---------- Schema and migrations
 
-LEGACY_TABLES = ("kv", "days", "measurements")
-
-SCHEMA_V2 = [
-    """CREATE TABLE IF NOT EXISTS users (
+# Version 1, the schema of the first release. Never edit it after a release: add a migration.
+SCHEMA = [
+    """CREATE TABLE users (
       id                INTEGER PRIMARY KEY AUTOINCREMENT,
       username          TEXT NOT NULL UNIQUE COLLATE NOCASE,
       password_hash     TEXT NOT NULL,
       is_admin          INTEGER NOT NULL DEFAULT 0,
       ingest_token_hash TEXT UNIQUE,
+      ingest_last_used  TEXT,
+      notice            TEXT,
       created_at        TEXT NOT NULL DEFAULT (datetime('now')))""",
-    """CREATE TABLE IF NOT EXISTS sessions (
+    """CREATE TABLE sessions (
       token_hash TEXT PRIMARY KEY,
       user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       expires_at TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now')))""",
-    """CREATE TABLE IF NOT EXISTS kv (
+    # Profile, settings, catalog, Paperless settings. Each save of a value adds 1 to its version:
+    # a device sends the version it started from, and the server refuses a lost update.
+    """CREATE TABLE kv (
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       key     TEXT NOT NULL,
       value   TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1,
       PRIMARY KEY (user_id, key))""",
-    """CREATE TABLE IF NOT EXISTS days (
-      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      date       TEXT NOT NULL,
-      log        TEXT,
-      health     TEXT,
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    # log_version works like kv.version, for the day log only (sync and import write health).
+    """CREATE TABLE days (
+      user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      date        TEXT NOT NULL,
+      log         TEXT,
+      health      TEXT,
+      log_version INTEGER NOT NULL DEFAULT 0,
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
       PRIMARY KEY (user_id, date))""",
-    """CREATE TABLE IF NOT EXISTS measurements (
+    """CREATE TABLE measurements (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       type        TEXT NOT NULL,
@@ -115,43 +129,10 @@ SCHEMA_V2 = [
       external_id TEXT,
       created_at  TEXT NOT NULL DEFAULT (datetime('now')),
       UNIQUE (user_id, external_id))""",
-    "CREATE INDEX IF NOT EXISTS idx_measurements_user_date ON measurements(user_id, date)",
-    "CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)",
-]
-
-
-def _columns(c, table):
-    return [r["name"] for r in c.execute(f"PRAGMA table_info({table})")]
-
-
-def _v2_accounts(c):
-    # Version 1 had no users. Keep its tables aside; the first account takes them over.
-    for t in LEGACY_TABLES:
-        cols = _columns(c, t)
-        if cols and "user_id" not in cols:
-            c.execute(f"ALTER TABLE {t} RENAME TO legacy_{t}")
-    for statement in SCHEMA_V2:
-        c.execute(statement)
-
-
-def _v3_user_fields(c):
-    c.execute("ALTER TABLE users ADD COLUMN ingest_last_used TEXT")
-    c.execute("ALTER TABLE users ADD COLUMN notice TEXT")
-
-
-def _v4_versions(c):
-    # Each save of a day log or of a kv value (profile) adds 1. A device sends the version it
-    # started from; if another device saved in between, the server refuses (no lost update).
-    c.execute("ALTER TABLE days ADD COLUMN log_version INTEGER NOT NULL DEFAULT 0")
-    c.execute("UPDATE days SET log_version = 1 WHERE log IS NOT NULL")
-    c.execute("ALTER TABLE kv ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
-
-
-def _v5_documents(c):
     # Documents kept in the diary (without Paperless). The file is on disk, encrypted (documents.py).
     # content and suggested hold health data, so they are encrypted too. Title, date and category
     # stay plain: the list needs them.
-    c.execute("""CREATE TABLE documents (
+    """CREATE TABLE documents (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       kind        TEXT NOT NULL,
@@ -165,13 +146,16 @@ def _v5_documents(c):
       content     TEXT,
       suggested   TEXT,
       edited      TEXT NOT NULL DEFAULT '[]',
-      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')))""")
-    c.execute("CREATE INDEX idx_documents_user ON documents(user_id, date)")
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')))""",
+    "CREATE INDEX idx_measurements_user_date ON measurements(user_id, date)",
+    "CREATE INDEX idx_sessions_user ON sessions(user_id)",
+    "CREATE INDEX idx_documents_user ON documents(user_id, date)",
+]
 
-
-# In order. Each step runs in its own transaction and sets user_version to its number.
-MIGRATIONS = [(2, _v2_accounts), (3, _v3_user_fields), (4, _v4_versions), (5, _v5_documents)]
-SCHEMA_VERSION = MIGRATIONS[-1][0]
+# Changes after the first release, in order: (version, function(connection)). Each step runs in
+# its own transaction and sets user_version to its number. Add steps from here on (2, 3, ...).
+MIGRATIONS = []
+SCHEMA_VERSION = MIGRATIONS[-1][0] if MIGRATIONS else 1
 
 
 def init():
@@ -186,6 +170,11 @@ def init():
         f.unlink(missing_ok=True)
     with connect() as c:
         c.execute("PRAGMA journal_mode=WAL")  # stored in the file; set once
+    with transaction() as c:
+        if c.execute("PRAGMA user_version").fetchone()[0] == 0:  # a new database
+            for statement in SCHEMA:
+                c.execute(statement)
+            c.execute("PRAGMA user_version = 1")
     for version, step in MIGRATIONS:
         with transaction() as c:
             if c.execute("PRAGMA user_version").fetchone()[0] < version:
@@ -193,21 +182,6 @@ def init():
                 c.execute(f"PRAGMA user_version = {version}")
     if DB_PATH.exists():
         DB_PATH.chmod(0o600)
-
-
-def _adopt_legacy(c, uid):
-    """Moves version 1 data (single user, no accounts) to the given user."""
-    names = {r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    if "legacy_kv" in names:
-        c.execute("INSERT OR IGNORE INTO kv (user_id, key, value) SELECT ?, key, value FROM legacy_kv", (uid,))
-    if "legacy_days" in names:
-        c.execute("INSERT OR IGNORE INTO days (user_id, date, log, health, updated_at, log_version) "
-                  "SELECT ?, date, log, health, updated_at, log IS NOT NULL FROM legacy_days", (uid,))
-    if "legacy_measurements" in names:
-        c.execute("INSERT OR IGNORE INTO measurements (user_id, type, date, time, value, source, external_id, created_at) "
-                  "SELECT ?, type, date, time, value, source, external_id, created_at FROM legacy_measurements", (uid,))
-    for t in LEGACY_TABLES:
-        c.execute(f"DROP TABLE IF EXISTS legacy_{t}")
 
 
 def _load(s):
@@ -253,13 +227,10 @@ def create_user(username, password_hash, is_admin=False, only_if_empty=False):
     """Returns the new user. Returns None if only_if_empty and an account exists.
     Raises sqlite3.IntegrityError if the username is taken."""
     with transaction() as c:
-        first = c.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
-        if only_if_empty and not first:
+        if only_if_empty and c.execute("SELECT COUNT(*) FROM users").fetchone()[0]:
             return None
         uid = c.execute("INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)",
                         (username, password_hash, 1 if is_admin else 0)).lastrowid
-        if first:
-            _adopt_legacy(c, uid)
         return _user(c.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone())
 
 

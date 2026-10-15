@@ -132,7 +132,6 @@ def test_spoofed_x_forwarded_for_is_ignored(c):
 
 
 def test_secure_cookie_ignores_untrusted_forwarded_proto(monkeypatch):
-    monkeypatch.setattr(auth, "COOKIE_SECURE", "auto")
     from starlette.requests import Request
 
     def req(host, scheme="http", headers=()):
@@ -170,12 +169,43 @@ def test_streamed_body_without_length_is_counted(c):
     assert r.status_code == 413
 
 
-def test_import_size_limit(c, monkeypatch):
-    monkeypatch.setattr(main, "MAX_IMPORT_MB", 1)
-    big = b"x" * (1024 * 1024 + 100 * 1024)  # over 1 MB plus the room for the form around the file
+def test_import_has_no_size_limit_but_needs_free_disk_space(c, monkeypatch):
+    # Bigger than the 1 MB of the JSON routes: accepted (then refused as not an export).
+    big = b"x" * (3 * 1024 * 1024)
     r = c.post("/api/import/apple-health", files={"file": ("export.zip", big, "application/zip")})
-    assert r.status_code == 413 and "1 MB" in r.json()["detail"]
+    assert r.status_code == 400 and "Could not read this file" in r.json()["detail"]
+    # Not enough room on the disk: refused before the upload is read.
+    monkeypatch.setattr(db, "room", lambda: 1000)
+    r = c.post("/api/import/apple-health", files={"file": ("export.zip", big, "application/zip")})
+    assert r.status_code == 507 and "free disk space" in r.json()["detail"]
     assert list(db.TMP_DIR.iterdir()) == []
+
+
+def test_free_disk_space_is_checked_while_the_upload_arrives(c, monkeypatch):
+    calls = []
+
+    def room():
+        calls.append(1)
+        return 10 ** 12 if len(calls) == 1 else -1  # fine at the start, then the disk fills up
+    monkeypatch.setattr(db, "room", room)
+
+    def chunks():
+        yield b"--b\r\nContent-Disposition: form-data; name=\"file\"; filename=\"e.zip\"\r\n\r\n"
+        for _ in range(20):
+            yield b"0" * (1024 * 1024)
+        yield b"\r\n--b--\r\n"
+    r = c.post("/api/import/apple-health", content=chunks(), headers={"Content-Type": "multipart/form-data; boundary=b"})
+    assert r.status_code == 507 and len(calls) == 2
+    assert list(db.TMP_DIR.iterdir()) == []
+
+
+def test_room_keeps_a_reserve(monkeypatch):
+    from collections import namedtuple
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(db.shutil, "disk_usage", lambda p: usage(100 * 1024 ** 3, 0, 15 * 1024 ** 3))
+    assert db.room() == 5 * 1024 ** 3  # 10% of a 100 GB disk is kept free
+    monkeypatch.setattr(db.shutil, "disk_usage", lambda p: usage(4 * 1024 ** 3, 0, 3 * 1024 ** 3))
+    assert db.room() == 2 * 1024 ** 3  # at least 1 GB is kept free
 
 
 def test_anonymous_upload_writes_nothing(c):
@@ -207,12 +237,20 @@ def test_zip_bomb_is_refused(c):
     assert r.status_code == 400 and "too much data" in r.json()["detail"]
 
 
-def test_unpacked_size_is_capped_while_reading(tmp_path, monkeypatch):
-    monkeypatch.setattr(health, "MAX_UNPACKED", 1000)
-    p = tmp_path / "export.xml"
-    p.write_bytes(b"<HealthData>" + b"<Record/>" * 500 + b"</HealthData>")
-    with pytest.raises(health.ImportRefused):
+def test_unpacked_size_must_fit_on_the_disk(tmp_path, monkeypatch):
+    p = tmp_path / "export.zip"
+    with zipfile.ZipFile(p, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("apple_health_export/export.xml", b"<HealthData>" + b"<Record/>" * 500 + b"</HealthData>")
+    monkeypatch.setattr(db, "room", lambda: 100)
+    with pytest.raises(health.ImportRefused, match="free disk space"):
         health.import_export(1, str(p))
+
+
+def test_reading_stops_at_the_declared_size():
+    reader = health._Limited(io.BytesIO(b"x" * 5000), 1000)
+    with pytest.raises(health.ImportRefused):
+        while reader.read(400):
+            pass
 
 
 def test_entity_expansion_is_refused(c):
@@ -234,8 +272,8 @@ def test_broken_files_get_a_plain_message(c):
 
 def test_paperless_token_is_encrypted(c):
     secret = "pl-secret-0123456789abcdef"
-    cfg = c.put("/api/me/paperless", json={"token": secret, "tag": "medical"}).json()
-    assert cfg["hasToken"] is True and cfg["tokenFromServer"] is False and secret not in str(cfg)
+    cfg = c.put("/api/me/paperless", json={"token": secret, "tags": ["medical"]}).json()
+    assert cfg["hasToken"] is True and "tokenFromServer" not in cfg and secret not in str(cfg)
     uid = c.get("/api/auth/status").json()["user"]["id"]
     assert paperless.user_config(uid)[0] == secret  # round trip
     stored = db.get_kv(uid, "paperless", {})
@@ -248,14 +286,6 @@ def test_paperless_token_is_encrypted(c):
     assert c.put("/api/me/paperless", json={"token": ""}).json()["hasToken"] is False
 
 
-def test_old_plain_tokens_are_encrypted_at_start(c):
-    uid = c.get("/api/auth/status").json()["user"]["id"]
-    db.set_kv(uid, "paperless", {"token": "old-plain", "tag": "x"})
-    paperless.encrypt_old_tokens()
-    assert "token" not in db.get_kv(uid, "paperless", {})
-    assert paperless.user_config(uid)[0] == "old-plain"
-
-
 def test_wrong_key_does_not_crash(c, monkeypatch):
     blob = crypto.encrypt("abc")
     monkeypatch.setenv("DIARY_SECRET_KEY", "another key")
@@ -266,26 +296,6 @@ def test_wrong_key_does_not_crash(c, monkeypatch):
         monkeypatch.delenv("DIARY_SECRET_KEY")
         crypto.init()
     assert crypto.decrypt(blob) == "abc"
-
-
-def test_env_token_is_for_the_named_user_only(c, monkeypatch, caplog):
-    monkeypatch.setattr(paperless, "ENV_TOKEN", "from-env")
-    anna = c.get("/api/auth/status").json()["user"]["id"]
-    db.set_kv(anna, "paperless", {})
-    # Without PAPERLESS_TOKEN_USER, nobody uses it, and the log says so.
-    monkeypatch.setattr(paperless, "ENV_TOKEN_USER", "")
-    assert paperless.user_config(anna) == ("", "medical", False)
-    paperless.check_env()
-    assert "PAPERLESS_TOKEN_USER" in caplog.text
-    # Named user: only fred, even though anna is the first administrator.
-    monkeypatch.setattr(paperless, "ENV_TOKEN_USER", "fred")
-    fred_id = c.post("/api/users", json={"username": "Fred", "password": PW}).json()["id"]
-    assert paperless.user_config(anna)[0] == ""
-    assert login("fred").get("/api/me/paperless").json() | {} == paperless.public_config(fred_id)
-    assert paperless.public_config(fred_id)["tokenFromServer"] is True
-    # It does not move to whoever becomes an administrator.
-    assert c.put(f"/api/users/{fred_id}/admin", json={"isAdmin": True}).status_code == 200
-    assert paperless.user_config(anna)[0] == ""
 
 
 def test_paperless_next_link_to_another_host_is_not_followed(monkeypatch):
@@ -306,7 +316,7 @@ def test_paperless_next_link_to_another_host_is_not_followed(monkeypatch):
 def test_cache_is_cleared_when_settings_change(c):
     uid = c.get("/api/auth/status").json()["user"]["id"]
     paperless._cache[uid] = (9e18, [{"id": 1}])
-    c.put("/api/me/paperless", json={"tag": "other"})
+    c.put("/api/me/paperless", json={"tags": ["other"]})
     assert uid not in paperless._cache
 
 

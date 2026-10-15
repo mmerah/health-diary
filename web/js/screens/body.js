@@ -2,7 +2,7 @@
 // Charts come from chart.js; the numbers from trends-data.js (pure, tested).
 import { fullLabel, label as dateLabel, parse, relativeDay, shortLabel, today as todayIso, addDays } from '../core/dates.js';
 import { duration, esc, num, plural } from '../core/format.js';
-import { bmi, MEASUREMENTS, normalizeProfile, severityLabel } from '../core/schema.js';
+import { bmi, MEASUREMENTS, measurementDef, measurementTypes, normalizeProfile, severityLabel } from '../core/schema.js';
 import { ICON, store, toast } from '../core/ui.js';
 import { lineChart, stripHeatmap, tableToggle, toggleTable } from './chart.js';
 import {
@@ -32,8 +32,8 @@ function deleteBtn(m, what) {
   return `<button type="button" class="icon-btn" data-act="del" data-id="${esc(m.id)}" aria-label="Delete ${esc(what)} from ${esc(fullLabel(m.date))}">${ICON.trash}</button>`;
 }
 
-function flagPill(text) {
-  return text ? `<span class="pill high">${ICON.alert}${esc(text)}</span>` : '';
+function flagPill(text, tone = 'high') {
+  return text ? `<span class="pill ${tone}">${ICON.alert}${esc(text)}</span>` : '';
 }
 
 function emptyState(icon, title, how) {
@@ -53,15 +53,21 @@ function allReadings(list, what) {
     <ul class="rows">${[...list].reverse().map(m => readingRow(m, what)).join('')}</ul></details>`;
 }
 
+const defOf = type => measurementDef(type) || { label: 'Value', unit: '', fields: [{ step: 0.1 }], format: v => String(v), flag: () => null };
+const decimalsOf = def => (String((def.fields[0] || {}).step || 1).split('.')[1] || '').length;
+/** The number without its unit, with the decimals of the type. */
+const plainValue = (type, v) => (type === 'bp' ? `${v.sys}/${v.dia}` : num(v, type === 'weight' || type === 'temp' ? 1 : decimalsOf(defOf(type))));
+
 /** The latest reading of a card, large, with its date and flag in words. */
 function latestHero(m) {
   const v = m.value;
-  const main = m.type === 'bp' ? `${v.sys}/${v.dia}` : num(v, 1);
-  const flag = MEASUREMENTS[m.type].flag(v);
+  const def = defOf(m.type);
+  const main = plainValue(m.type, v);
+  const flag = def.flag(v);
   return `<div class="trend-hero">
-    <p class="trend-big trend-big-sm"><span class="num">${esc(main)}</span><span class="unit">${esc(MEASUREMENTS[m.type].unit)}</span></p>
+    <p class="trend-big trend-big-sm"><span class="num">${esc(main)}</span><span class="unit">${esc(def.unit)}</span></p>
     <p class="trend-sub">${esc([relativeDay(m.date), m.time, m.type === 'bp' && v.pulse ? `pulse ${v.pulse}` : ''].filter(Boolean).join(' · '))}</p>
-    ${flag ? `<p>${flagPill(flag)}</p>` : ''}
+    ${flag ? `<p>${flagPill(flag, def.custom ? 'caution' : 'high')}</p>` : ''}
   </div>`;
 }
 
@@ -69,7 +75,7 @@ function latestHero(m) {
 
 function summaryStrip() {
   const s = trendSummary(data.measurements, data.days, data.today, rangeKey());
-  const tile = (target, label, value, sub) => `<li><button type="button" class="sum-tile" data-act="jump" data-target="${target}">
+  const tile = (target, label, value, sub) => `<li><button type="button" class="sum-tile" data-act="jump" data-target="${esc(target)}">
     <span class="sum-label">${esc(label)}</span><span class="sum-value num">${esc(value)}</span><span class="sum-sub">${esc(sub)}</span></button></li>`;
   const w = s.weight.last, bp = s.bp.last;
   const tiles = [
@@ -78,6 +84,10 @@ function summaryStrip() {
     tile('bp', 'Blood pressure', bp ? `${bp.value.sys}/${bp.value.dia}` : '–',
       s.bp.avg ? `Average 30 days: ${s.bp.avg.sys}/${s.bp.avg.dia} (${plural(s.bp.n, 'reading')})` : bp ? `Last: ${relativeDay(bp.date)}` : 'No reading yet'),
     s.temp ? tile('temp', 'Temperature', MEASUREMENTS.temp.format(s.temp.last.value), relativeDay(s.temp.last.date)) : '',
+    ...ownTypes().map(([id, def]) => {
+      const last = sortByTime(data.measurements.filter(m => m.type === id)).pop();
+      return last && last.date >= addDays(data.today, -13) ? tile(id, def.label, def.format(last.value), relativeDay(last.date)) : '';
+    }),
     tile('weekly', 'Sleep', s.sleep.median == null ? '–' : hm(s.sleep.median), s.sleep.nights ? `Median, last 7 days (${plural(s.sleep.nights, 'night')})` : 'No sleep data in 7 days'),
     tile('sym', 'Symptoms', plural(s.symptomDays, 'day'), 'With a symptom, last 4 weeks'),
   ].filter(Boolean);
@@ -167,13 +177,14 @@ function readingRow(m, what) {
   const v = m.value;
   const [main, unit, extra] = m.type === 'bp'
     ? [`${v.sys}/${v.dia}`, 'mmHg', v.pulse ? `Pulse ${v.pulse}` : '']
-    : [num(v, 1), MEASUREMENTS[m.type].unit, m.type === 'weight' ? sourceText(m) : ''];
-  const flag = MEASUREMENTS[m.type].flag(v);
+    : [plainValue(m.type, v), defOf(m.type).unit, m.type === 'weight' ? sourceText(m) : ''];
+  const def = defOf(m.type);
+  const flag = def.flag(v);
   return `<li class="reading-row"><span class="grow">
       <span class="reading"><span class="num">${esc(main)}</span> <span class="unit">${esc(unit)}</span></span>
       <span class="sub">${esc([dayTime(m), extra].filter(Boolean).join(' · '))}</span>
-      ${flag ? `<span class="reading-flag">${flagPill(flag)}</span>` : ''}
-    </span>${deleteBtn(m, `${what} ${MEASUREMENTS[m.type].format(v)}`)}</li>`;
+      ${flag ? `<span class="reading-flag">${flagPill(flag, def.custom ? 'caution' : 'high')}</span>` : ''}
+    </span>${deleteBtn(m, `${what} ${def.format(v)}`)}</li>`;
 }
 
 function mountBp() {
@@ -198,6 +209,63 @@ function mountBp() {
   }));
 }
 
+// ---------- The user's own measurements (Profile → Settings → My lists)
+
+const ownTypes = () => Object.entries(measurementTypes()).filter(([, d]) => d.custom);
+const rangeWords = d => {
+  const f = v => d.format(v);
+  return d.low != null && d.high != null ? `Your range: ${f(d.low)} to ${f(d.high)}`
+    : d.low != null ? `Your range: from ${f(d.low)}` : d.high != null ? `Your range: up to ${f(d.high)}` : '';
+};
+
+function ownChange(list, def) {
+  const c = weightChange(inRange(list, '3m', data.today));
+  if (!c) return '';
+  const d = Math.round(c.delta * 1000) / 1000;
+  // "Down 1/10" reads badly: units like "/10" show the number only.
+  const amount = (def.unit || '').startsWith('/') ? num(Math.abs(d), decimalsOf(def)) : def.format(Math.abs(d));
+  return d === 0 ? `No change since ${shortLabel(c.from)}` : `${d < 0 ? 'Down' : 'Up'} ${amount} since ${shortLabel(c.from)}`;
+}
+
+function ownCard(id, def) {
+  const all = sortByTime(data.measurements.filter(m => m.type === id));
+  const what = def.label.toLowerCase();
+  let body;
+  if (!all.length) {
+    body = emptyState(ICON.symptom, `No ${what} yet.`, 'Tap Add to write a value.');
+  } else {
+    const change = ownChange(all, def);
+    body = `${latestHero(all[all.length - 1])}
+      ${change ? `<p class="trend-change">${esc(change)}</p>` : ''}
+      ${all.length >= 2 ? `${def.low != null || def.high != null ? `<ul class="chart-legend" aria-label="Legend"><li><i class="chart-key key-range" aria-hidden="true"></i>${esc(rangeWords(def))}</li></ul>` : ''}
+        <div class="chart-box" id="${esc(id)}-chart"></div>
+        ${table(`${id}-chart`, def.label, [{ text: 'Date' }, { text: def.unit ? `${def.label} (${def.unit})` : def.label, num: true }],
+    [...all].reverse().map(m => [dayTime(m), plainValue(id, m.value)]))}
+        <div class="trend-tools">${tableToggle(`${id}-chart`)}</div>` : ''}
+      ${allReadings(all, what)}`;
+  }
+  return `<section class="card trend-card" id="${esc(id)}-card" aria-labelledby="${esc(id)}-title">${cardHead(id, def.label, ICON.symptom, id, what)}${body}</section>`;
+}
+
+function mountOwn() {
+  for (const [id, def] of ownTypes()) {
+    const host = document.getElementById(`${id}-chart`);
+    if (!host) continue;
+    const all = sortByTime(data.measurements.filter(m => m.type === id));
+    const step = (def.fields[0] || {}).step || 1;
+    charts.push(lineChart(host, {
+      label: def.label,
+      rows: all.map(m => ({ t: timeOf(m), v: [m.value], m })),
+      series: [{ key: 'series-own', name: def.label }],
+      minSpan: Math.max(step * 4, ((def.fields[0].max - def.fields[0].min) || 10) / 20),
+      include: [def.low, def.high].filter(v => v != null),
+      band: def.low != null || def.high != null ? { from: def.low, to: def.high, cls: 'is-range', label: 'Your range' } : null,
+      yFormat: v => num(v, decimalsOf(def)),
+      tip: r => ({ title: dayTime(r.m), lines: [{ text: def.format(r.m.value) }, ...(def.flag(r.m.value) ? [{ text: def.flag(r.m.value) }] : [])] }),
+    }));
+  }
+}
+
 // ---------- Temperature
 
 function tempCard() {
@@ -210,31 +278,39 @@ function tempCard() {
 
 // ---------- Sleep and activity: weekly medians
 
+const pct = v => (v == null ? '–' : `${num(v, Number.isInteger(v) ? 0 : 1)}%`);
 const WEEKLY = [
-  { key: 'sleep', id: 'wk-sleep', title: 'Sleep', icon: ICON.moon, series: 'series-sleep', fmt: hm, scale: 1 / 60, axis: v => (Number.isInteger(v) ? `${v}h` : `${Math.floor(v)}h${String(Math.round((v % 1) * 60)).padStart(2, '0')}`), minSpan: 2, what: 'nights' },
-  { key: 'steps', id: 'wk-steps', title: 'Steps', icon: ICON.steps, series: 'series-steps', fmt: v => (v == null ? '–' : num(v)), axis: v => (v >= 1000 ? `${num(v / 1000)}k` : num(v)), minSpan: 2000, what: 'days' },
-  { key: 'restingHr', id: 'wk-hr', title: 'Resting heart rate', icon: ICON.heart, series: 'series-hr', fmt: v => (v == null ? '–' : `${num(v)} bpm`), axis: v => num(v), minSpan: 10, what: 'days' },
+  { key: 'sleep', id: 'wk-sleep', title: 'Sleep', icon: ICON.moon, series: 'series-sleep', fmt: hm, scale: 1 / 60, axis: v => (Number.isInteger(v) ? `${v}h` : `${Math.floor(v)}h${String(Math.round((v % 1) * 60)).padStart(2, '0')}`), minSpan: 2, count: 'nights', what: 'night' },
+  { key: 'steps', id: 'wk-steps', title: 'Steps', icon: ICON.steps, series: 'series-steps', fmt: v => (v == null ? '–' : num(v)), axis: v => (v >= 1000 ? `${num(v / 1000)}k` : num(v)), minSpan: 2000, count: 'stepDays', what: 'day' },
+  { key: 'restingHr', id: 'wk-hr', title: 'Resting heart rate', icon: ICON.heart, series: 'series-hr', fmt: v => (v == null ? '–' : `${num(v)} bpm`), axis: v => num(v), minSpan: 10, count: 'hrDays', what: 'day' },
+  // Apple Watch only: shown when there is data.
+  { key: 'spo2', key2: 'spo2Min', id: 'wk-spo2', title: 'Blood oxygen', icon: ICON.heart, series: 'series-spo2', fmt: pct, axis: v => `${num(v)}%`, minSpan: 6, count: 'spo2Days', what: 'day', optional: true,
+    legend: ['Daily average (middle of the week)', 'Lowest of the week'] },
+  { key: 'resp', id: 'wk-resp', title: 'Respiratory rate', icon: ICON.activity, series: 'series-resp', fmt: v => (v == null ? '–' : `${num(v, 1)} /min`), axis: v => num(v), minSpan: 4, count: 'respDays', what: 'day', optional: true },
 ];
-const countKey = { sleep: 'nights', steps: 'stepDays', restingHr: 'hrDays' };
 const weekTitle = w => `Week ${shortLabel(w.start)} – ${shortLabel(w.end)}`;
+const weeklyShown = weeks => WEEKLY.filter(m => !m.optional || weeks.some(w => w[m.key] != null));
 
 function weeklySection() {
   const weeks = weeklyMedians(data.days, data.today, WEEKS);
-  const any = weeks.some(w => w.sleep != null || w.steps != null || w.restingHr != null);
+  const shown = weeklyShown(weeks);
+  const any = weeks.some(w => shown.some(m => w[m.key] != null));
+  const cell = (m, w) => (m.key2 ? `${m.fmt(w[m.key])}${w[m.key2] != null ? ` (lowest ${m.fmt(w[m.key2])})` : ''}` : m.fmt(w[m.key]));
   const inner = !any
     ? emptyState(ICON.sync, 'No sleep or activity data yet.', 'This data comes from Apple Health. Set up the shortcut in Profile → Settings, or import your history there.')
-    : `<div class="weekly-grid" id="weekly-charts">${WEEKLY.map(m => {
+    : `<div class="weekly-grid" id="weekly-charts">${shown.map(m => {
       const latest = [...weeks].reverse().find(w => w[m.key] != null);
       return `<div class="weekly-item">
         <h3 class="weekly-title">${m.icon}${esc(m.title)}</h3>
-        <p class="weekly-value"><span class="num">${esc(latest ? m.fmt(latest[m.key]) : '–')}</span></p>
+        <p class="weekly-value"><span class="num">${esc(latest ? m.fmt(latest[m.key]) : '–')}</span>${m.key2 && latest && latest[m.key2] != null ? `<span class="weekly-extra">lowest ${esc(m.fmt(latest[m.key2]))}</span>` : ''}</p>
         <p class="weekly-sub">${latest ? `Median, ${esc(weekTitle(latest).replace('Week ', 'week '))}` : 'No data in 8 weeks'}</p>
+        ${m.legend ? `<ul class="chart-legend chart-legend-sm" aria-label="Legend"><li><i class="chart-key ${m.series}" aria-hidden="true"></i>${esc(m.legend[0])}</li><li><i class="chart-key ${m.series} is-dashed" aria-hidden="true"></i>${esc(m.legend[1])}</li></ul>` : ''}
         <div class="chart-box chart-small" id="${m.id}"></div>
       </div>`;
     }).join('')}</div>
     ${table('weekly-charts', 'Weekly medians, last 8 weeks',
-    [{ text: 'Week' }, { text: 'Sleep', num: true }, { text: 'Steps', num: true }, { text: 'Resting heart rate', num: true }],
-    [...weeks].reverse().map(w => [weekTitle(w), hm(w.sleep), w.steps == null ? '–' : num(w.steps), w.restingHr == null ? '–' : `${w.restingHr} bpm`]))}
+    [{ text: 'Week' }, ...shown.map(m => ({ text: m.title, num: true }))],
+    [...weeks].reverse().map(w => [weekTitle(w), ...shown.map(m => cell(m, w))]))}
     <div class="trend-tools">${tableToggle('weekly-charts')}</div>`;
   return `<section class="card trend-card trend-wide" id="weekly-card" aria-labelledby="weekly-title">
     <div class="card-head"><h2 id="weekly-title" class="trend-title" tabindex="-1">${ICON.activity}Sleep and activity</h2></div>
@@ -245,18 +321,22 @@ function weeklySection() {
 function mountWeekly() {
   if (!document.getElementById('weekly-charts')) return;
   const weeks = weeklyMedians(data.days, data.today, WEEKS);
-  for (const m of WEEKLY) {
+  for (const m of weeklyShown(weeks)) {
     const host = document.getElementById(m.id);
     if (!weeks.some(w => w[m.key] != null)) { host.innerHTML = '<p class="hint">No data.</p>'; continue; }
+    const val = (w, k) => (w[k] == null ? null : w[k] * (m.scale || 1));
     charts.push(lineChart(host, {
-      label: `${m.title}, weekly median, last 8 weeks`,
-      rows: weeks.map(w => ({ t: parse(w.start).getTime() + 3 * 86400000, v: [w[m.key] == null ? null : w[m.key] * (m.scale || 1)], w })),
-      series: [{ key: m.series, name: m.title }],
+      label: `${m.title}, weekly, last 8 weeks`,
+      rows: weeks.map(w => ({ t: parse(w.start).getTime() + 3 * 86400000, v: m.key2 ? [val(w, m.key), val(w, m.key2)] : [val(w, m.key)], w })),
+      series: m.key2 ? [{ key: m.series, name: 'Average' }, { key: m.series, name: 'Lowest', dashed: true }] : [{ key: m.series, name: m.title }],
       minSpan: m.minSpan,
       height: 132,
       ticks: 3,
       yFormat: m.axis,
-      tip: r => ({ title: weekTitle(r.w), lines: [{ text: `${m.fmt(r.w[m.key])}${r.w[m.key] == null ? ' (no data)' : ''}` }, { text: plural(r.w[countKey[m.key]], m.what === 'nights' ? 'night' : 'day') }] }),
+      tip: r => ({ title: weekTitle(r.w), lines: [
+        { text: r.w[m.key] == null ? 'No data' : m.key2 ? `Average ${m.fmt(r.w[m.key])}` : m.fmt(r.w[m.key]) },
+        ...(m.key2 && r.w[m.key2] != null ? [{ text: `Lowest ${m.fmt(r.w[m.key2])}` }] : []),
+        { text: plural(r.w[m.count], m.what) }] }),
     }));
   }
 }
@@ -310,11 +390,11 @@ function mountCharts() {
   charts = [];
   mountWeight();
   mountBp();
+  mountOwn();
   mountWeekly();
   mountSymptoms();
 }
 
-const TYPE_WORDS = { weight: 'Weight', bp: 'Blood pressure', temp: 'Temperature' };
 
 export default {
   async render(ctx) {
@@ -331,6 +411,7 @@ export default {
         ${weightCard()}
         ${bpCard()}
         ${tempCard()}
+        ${ownTypes().map(([id, def]) => ownCard(id, def)).join('')}
         ${weeklySection()}
         ${symptomsSection()}
       </div>`;
@@ -374,7 +455,7 @@ export default {
       const cardId = card.id;
       const index = [...card.querySelectorAll('[data-act="del"]')].indexOf(el);
       await ctx.api.deleteMeasurement(m.id);
-      const words = `${TYPE_WORDS[m.type] || 'Value'} ${MEASUREMENTS[m.type] ? MEASUREMENTS[m.type].format(m.value) : ''}`.trim();
+      const words = `${defOf(m.type).label} ${defOf(m.type).format(m.value)}`.trim();
       await ctx.refresh();
       // Focus goes to the next reading of the same list, or to the card title when the list is empty.
       const fresh = document.getElementById(cardId);

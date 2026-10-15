@@ -156,7 +156,7 @@ function onWidth(host, draw) {
  *   domain: [t0, t1],                      // x range (default: first to last row)
  *   minSpan: 4, include: [145],            // y range: minimum span, values that must be visible
  *   yFormat: v => '78', area: true,        // area fill under the first series
- *   band: { from: 140, label: 'High' },    // shaded y band (to the top when no `to`)
+ *   band: { from: 140, label: 'High', cls }, // shaded y band; open at the top (no `to`) or bottom (no `from`)
  *   refLines: [{ v: 90, label: '90' }],
  *   endLabels: true,                       // series names at the right end (multi-series)
  *   tip: row => ({ title, lines: [{ text, key }] }),
@@ -181,10 +181,14 @@ export function lineChart(host, o) {
     const sy = scale(y.lo, y.hi, H - B, T);
     let s = '';
 
-    if (o.band && o.band.from < y.hi) {
-      const top = sy(Math.min(y.hi, o.band.to ?? y.hi)), bot = sy(Math.max(y.lo, o.band.from));
-      s += `<rect class="chart-band" x="${L}" y="${top.toFixed(1)}" width="${W - L - R}" height="${(bot - top).toFixed(1)}"/>`;
-      if (o.band.label) s += `<text class="chart-band-label" x="${L + 8}" y="${(top + 15).toFixed(1)}">${esc(o.band.label)}</text>`;
+    if (o.band) {
+      // A band can be open on one side: from a value to the top, or from the bottom to a value.
+      const from = o.band.from ?? -Infinity, to = o.band.to ?? Infinity, cls = o.band.cls ? ` ${esc(o.band.cls)}` : '';
+      if (from < y.hi && to > y.lo) {
+        const top = sy(Math.min(y.hi, to)), bot = sy(Math.max(y.lo, from));
+        s += `<rect class="chart-band${cls}" x="${L}" y="${top.toFixed(1)}" width="${W - L - R}" height="${(bot - top).toFixed(1)}"/>`;
+        if (o.band.label) s += `<text class="chart-band-label${cls}" x="${L + 8}" y="${(top + 15).toFixed(1)}">${esc(o.band.label)}</text>`;
+      }
     }
     for (const v of y.ticks) {
       const py = sy(v).toFixed(1);

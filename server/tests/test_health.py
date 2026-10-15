@@ -159,8 +159,11 @@ def test_night_of():
 # ---------- Shortcut
 
 def test_shortcut_ingest_keeps_hand_corrections(c, key):
-    p = {"date": "2026-10-14", "sleep": SLEEP, "steps": "2 140", "steps_yesterday": 9832, "resting_hr": 57.6,
-         "hrv": "46,7", "weight": 76.9, "weight_date": "2026-10-14T07:31:00+02:00",
+    day = "|2026-10-14T00:00:00+02:00|2026-10-15T00:00:00+02:00"
+    p = {"date": "2026-10-14", "sleep": SLEEP,
+         "steps_days": "9832|2026-10-13T00:00:00+02:00|2026-10-14T00:00:00+02:00\n2 140" + day,
+         "resting_hr_days": "57.6" + day, "hrv_days": "46,7" + day,
+         "weight": 76.9, "weight_date": "2026-10-14T07:31:00+02:00",
          "workouts": "Walking|2026-10-14T12:10:00+02:00|2026-10-14T12:34:00+02:00"}
     h = ingest(c, p, key).json()["health"]
     assert h["sleep"] == {"total": 410, "deep": 60, "rem": 90, "core": 260, "awake": 10, "bed": "23:30",
@@ -173,7 +176,7 @@ def test_shortcut_ingest_keeps_hand_corrections(c, key):
 
     # Correct the steps by hand, then sync again: the correction stays.
     assert c.put("/api/days/2026-10-14/health", json={**h, "steps": 5000, "edited": ["steps"]}).status_code == 204
-    h2 = ingest(c, {**p, "steps": 3000}, key).json()["health"]
+    h2 = ingest(c, {**p, "steps_days": "3000" + day}, key).json()["health"]
     assert h2["steps"] == 5000
     # The same weight twice is stored once.
     assert len([m for m in c.get("/api/measurements?type=weight").json() if m["date"] == "2026-10-14"]) == 1
@@ -181,9 +184,12 @@ def test_shortcut_ingest_keeps_hand_corrections(c, key):
 
 def test_shortcut_refuses_unknown_fields_and_bad_values(c, key):
     assert ingest(c, {"stepz": 1}, key).status_code == 400
+    assert ingest(c, {"steps": 1}, key).status_code == 400  # one-number fields are not accepted
     assert ingest(c, {"date": "14/10/2026"}, key).status_code == 400
     # Values that cannot be true are ignored.
-    h = ingest(c, {"date": "2026-10-16", "steps": "9999999", "resting_hr": 5, "hrv": "abc"}, key).json()["health"]
+    day = "|2026-10-16T00:00:00+02:00|2026-10-17T00:00:00+02:00"
+    h = ingest(c, {"date": "2026-10-16", "steps_days": "9999999" + day, "resting_hr_days": "5" + day,
+                   "hrv_days": "abc" + day}, key).json()["health"]
     assert "steps" not in h and "restingHr" not in h and "hrv" not in h
 
 
@@ -343,3 +349,45 @@ def test_deep_nesting_is_refused(tmp_path):
     p.write_bytes(b"<HealthData>" + b"<a>" * 1000 + b"</a>" * 1000 + b"</HealthData>")
     with pytest.raises(health.ImportRefused), open(p, "rb") as fh:
         health._read_export(fh)
+
+
+# ---------- Oxygen and breathing
+
+@pytest.mark.parametrize("raw, expected", [
+    ("0.97", 97.0), ("0,955", 95.5), (97, 97.0), ("97 %", 97.0), ("96,5 %", 96.5), (1, 100.0),
+    ("0.3", None), ("120", None), ("abc", None),
+])
+def test_spo2_values(raw, expected):
+    assert health.spo2(raw) == expected
+
+
+def test_oxygen_and_breathing_by_day(c, key):
+    p = {"date": "2026-10-23",
+         "spo2_days": "0.97|2026-10-22T02:00:00+02:00|2026-10-22T02:01:00+02:00\n"
+                      "0.93|2026-10-22T03:00:00+02:00|2026-10-22T03:01:00+02:00\n"
+                      "96 %|2026-10-23T02:00:00+02:00|2026-10-23T02:01:00+02:00\n"
+                      "0.2|2026-10-23T03:00:00+02:00|2026-10-23T03:01:00+02:00",
+         "respiratory_rate_days": "14,5|2026-10-23T01:00:00+02:00|2026-10-23T01:01:00+02:00\n"
+                                  "15|2026-10-23T02:00:00+02:00|2026-10-23T02:01:00+02:00\n"
+                                  "200|2026-10-23T03:00:00+02:00|2026-10-23T03:01:00+02:00"}
+    h = ingest(c, p, key).json()["health"]
+    assert (h["spo2"], h["spo2Min"], h["respiratoryRate"]) == (96.0, 96, 14.8)
+    y = c.get("/api/days/2026-10-22").json()["health"]
+    assert (y["spo2"], y["spo2Min"]) == (95.0, 93) and "respiratoryRate" not in y
+    # Hand corrections of these fields are accepted and checked.
+    assert c.put("/api/days/2026-10-22/health", json={"spo2": 95.5, "spo2Min": 90, "respiratoryRate": 13.5}).status_code == 204
+    assert c.put("/api/days/2026-10-22/health", json={"spo2": 101}).status_code == 400
+
+
+def test_oxygen_and_breathing_from_the_export(c):
+    xml = EXPORT.replace("2025-03-02", "2025-06-02").replace("<ActivitySummary", (
+        '<Record type="HKQuantityTypeIdentifierOxygenSaturation" sourceName="Watch" unit="%" '
+        'startDate="2025-06-02 02:00:00 +0100" endDate="2025-06-02 02:00:00 +0100" value="0.98"/>'
+        '<Record type="HKQuantityTypeIdentifierOxygenSaturation" sourceName="Watch" unit="%" '
+        'startDate="2025-06-02 04:00:00 +0100" endDate="2025-06-02 04:00:00 +0100" value="0.91"/>'
+        '<Record type="HKQuantityTypeIdentifierRespiratoryRate" sourceName="Watch" unit="count/min" '
+        'startDate="2025-06-02 03:00:00 +0100" endDate="2025-06-02 03:00:00 +0100" value="13.5"/>'
+        '<ActivitySummary')).encode()
+    assert c.post("/api/import/apple-health", files={"file": ("export.xml", xml, "text/xml")}).status_code == 200
+    h = c.get("/api/days/2025-06-02").json()["health"]
+    assert (h["spo2"], h["spo2Min"], h["respiratoryRate"]) == (94.5, 91, 13.5)

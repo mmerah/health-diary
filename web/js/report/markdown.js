@@ -74,7 +74,8 @@ export function toMarkdown(model, opts = {}) {
   if (inc.wearable && model.wearable) wearableSection(model, h, push);
   if (inc.drinks && model.drinks.length) {
     push('', '## Drinks', '', 'Days where a drink was not recorded are left out.', '');
-    for (const d of model.drinks) push(`- ${d.label}: ${drinkText(d)}.`);
+    // Own counters are the user's words: they go through the redactor in AI mode.
+    for (const d of model.drinks) push(d.custom ? `- ${T(`${d.label}: ${drinkText(d)}`)}.` : `- ${d.label}: ${drinkText(d)}.`);
   }
   if (inc.associations && model.associations.length) associationsSection(model, h, push);
   if (model.monthly && model.monthly.length) monthlySection(model);
@@ -134,7 +135,7 @@ export function toMarkdown(model, opts = {}) {
   }
 
   function measurementsSection(m) {
-    const types = ['weight', 'bp', 'temp'].map(t => m.measurements[t]).filter(x => x.rows.length || x.before);
+    const types = Object.values(m.measurements).filter(x => x.rows.length || x.before);
     if (!types.length) return;
     push('', '## Measurements', '');
     const at = r => `${D(r.date)}${r.time ? ` ${r.time}` : ''}`;
@@ -144,7 +145,8 @@ export function toMarkdown(model, opts = {}) {
       const before = x.before ? ` Before the period: ${measurementText(x.before)} (${at(x.before)}).` : '';
       const change = x.change ? ` Change: ${x.change.kg > 0 ? '+' : ''}${one(x.change.kg)} kg (${x.change.pct > 0 ? '+' : ''}${one(x.change.pct)}%).` : '';
       const avg = x.mean ? ` Mean: ${x.mean.sys}/${x.mean.dia} mmHg over ${plural(x.mean.n, 'reading')}.` : '';
-      push(`- ${x.label}: ${parts.join('; ')}.${avg}${before}${change}`);
+      const range = x.custom && (x.above.length || x.below.length) ? ` Outside your range: ${x.above.length + x.below.length} of ${plural(x.rows.length, 'reading')}.` : '';
+      push(`- ${x.custom ? T(x.label) : x.label}: ${parts.join('; ')}.${avg}${range}${before}${change}`);
     }
   }
 
@@ -166,25 +168,33 @@ export function toMarkdown(model, opts = {}) {
     push(`- Steps: ${range(o.steps, v => stepsText(v, ai))}`);
     if (o.restingHr) push(`- Resting heart rate: ${range(o.restingHr, v => `${Math.round(v)}`)} bpm`);
     if (o.hrv) push(`- HRV: ${range(o.hrv, v => `${Math.round(v)}`)} ms`);
+    if (o.spo2) push(`- Blood oxygen, daily average: ${range(o.spo2, v => `${one(v)} %`)}`);
+    if (o.spo2Min) push(`- Blood oxygen, lowest of the day: ${range(o.spo2Min, v => `${Math.round(v)} %`)}; ${plural(w.lowOxygenDays.length, 'day')} under 90 %`);
+    if (o.respiratoryRate) push(`- Respiratory rate: ${range(o.respiratoryRate, v => one(v))} breaths a minute`);
     if (w.workouts.length) push(`- Workouts: ${w.workouts.map(x => `${T(x.type)} ${x.count}× (${x.minutes} min)`).join(', ')}`);
     if (w.compare) {
       const c = w.compare;
       const cmp = (k, f) => (c.first[k] && c.last[k] ? `${f(c.first[k].median)} → ${f(c.last[k].median)}` : null);
       const parts = [['sleep', cmp('sleep', sleepText)], ['bedtime', cmp('bed', hm)], ['steps', cmp('steps', v => stepsText(v, ai))],
-        ['resting HR', cmp('restingHr', v => Math.round(v))], ['HRV', cmp('hrv', v => Math.round(v))]].filter(x => x[1]);
+        ['resting HR', cmp('restingHr', v => Math.round(v))], ['HRV', cmp('hrv', v => Math.round(v))],
+        ['blood oxygen', cmp('spo2', v => `${one(v)} %`)], ['respiratory rate', cmp('respiratoryRate', one)]].filter(x => x[1]);
       push(`- First 4 weeks → last 4 weeks: ${parts.map(x => `${x[0]} ${x[1]}`).join('; ')}`);
     }
     push('', 'Weekly medians:', '');
-    push(...table(['Week', 'Sleep', 'Bedtime', 'Steps', 'Rest HR', 'HRV'], w.weeks.map(x => [
+    // Blood oxygen and respiratory rate columns only when the watch gave them.
+    const ox = w.weeks.some(x => x.spo2 != null), rr = w.weeks.some(x => x.respiratoryRate != null);
+    push(...table(['Week', 'Sleep', 'Bedtime', 'Steps', 'Rest HR', 'HRV', ...(ox ? ['SpO2 %', 'SpO2 low'] : []), ...(rr ? ['Resp/min'] : [])], w.weeks.map(x => [
       `${D(x.start)} to ${D(x.end)}`, sleepText(x.sleep), hm(x.bed), stepsText(x.steps, ai),
-      x.restingHr == null ? '–' : Math.round(x.restingHr), x.hrv == null ? '–' : Math.round(x.hrv)])));
+      x.restingHr == null ? '–' : Math.round(x.restingHr), x.hrv == null ? '–' : Math.round(x.hrv),
+      ...(ox ? [x.spo2 == null ? '–' : one(x.spo2), x.spo2Min == null ? '–' : Math.round(x.spo2Min)] : []),
+      ...(rr ? [x.respiratoryRate == null ? '–' : one(x.respiratoryRate)] : [])])));
   }
 
   function associationsSection(m) {
     push('', '## Patterns (not causes)', '', 'Days with the symptom out of diary days, in two groups of days. This shows what happened together, not a cause. * = few days: read with care.', '');
     push(...table(['Symptom', 'Compared', 'Group 1', 'Group 2'], m.associations.map(a => [
-      `${T(a.symptom)}${a.small ? ' *' : ''}`, a.label,
-      `${a.aLabel}: ${a.a.with}/${a.a.days} (${pct(a.rateA)})`, `${a.bLabel}: ${a.b.with}/${a.b.days} (${pct(a.rateB)})`])));
+      `${T(a.symptom)}${a.small ? ' *' : ''}`, a.custom ? T(a.label) : a.label,
+      `${a.custom ? T(a.aLabel) : a.aLabel}: ${a.a.with}/${a.a.days} (${pct(a.rateA)})`, `${a.custom ? T(a.bLabel) : a.bLabel}: ${a.b.with}/${a.b.days} (${pct(a.rateB)})`])));
   }
 
   function monthlySection(m) {
@@ -215,10 +225,11 @@ export function toMarkdown(model, opts = {}) {
   function dailySection(m) {
     const dl = m.daily;
     push('', '## Daily log', '');
-    push(`${TABLE_TEXT[dl.tableMode]} Drinks: water/coffee/alcohol ("–" = not recorded). Symptoms with severity.`, '');
+    const counters = m.counters.map(c => (c.custom ? T(c.label) : c.label).toLowerCase()).join('/');
+    push(`${TABLE_TEXT[dl.tableMode]} Drinks: ${counters} ("–" = not recorded). Symptoms with severity.`, '');
     push(...table(['Day', 'Sleep', 'Steps', 'Meals', 'Drinks', 'Symptoms', 'Notes'], dl.rows.map(r => [
       `${Dday(r.date)}${r.partial ? ' (today, partial)' : ''}`, r.sleep == null ? '' : sleepText(r.sleep), r.steps == null ? '' : stepsText(r.steps, ai),
-      r.meals == null ? '' : r.meals, drinksShort(r.drinks),
+      r.meals == null ? '' : r.meals, drinksShort(r.drinks, m.counters),
       r.symptoms.map(s => `${T(s.name, r.date)} ${s.severity ? sevShort(s.severity) : '(severity not set)'}`).join(', '),
       r.notes ? (ai ? 'yes' : truncate(r.notes, 80)) : '']), ''));
     if (!dl.details.length) return;
@@ -294,7 +305,7 @@ export function dayLines(d, { T }, { brief = false, short = false, food = true }
         .filter(x => x.text).sort((a, b) => a.sort.localeCompare(b.sort));
       if (meals.length) out.push(`Food: ${meals.map(x => `${x.time ? `${x.time} ` : ''}${x.label.toLowerCase()}: ${inline(T(x.text, d.date)).replace(/[.;]+$/, '')}`).join('; ')}`);
     }
-    if (!short) { const dr = drinkSummary(l.drinks); if (dr) out.push(`Drinks: ${dr}`); }
+    if (!short) { const dr = drinkSummary(l.drinks); if (dr) out.push(`Drinks: ${T(dr, d.date)}`); }
     const meds = [...d.meds.filter(x => !short || !x.done).map(x => `${T(x.name, d.date)} ${x.done ? `taken${x.time ? ` ${x.time}` : ''}` : 'not ticked'}`),
       ...l.meds.extra.filter(x => x.name).map(x => `${T(x.name, d.date)}${x.time ? ` at ${x.time}` : ''}`)];
     if (meds.length) out.push(`Medication: ${meds.join('; ')}`);

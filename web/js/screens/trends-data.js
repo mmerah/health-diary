@@ -40,7 +40,7 @@ export function weightChange(list) {
 /**
  * Weekly medians for the last `weeks` weeks. Weeks are 7-day blocks that end today.
  * days: [{ date, log, health }] from api.listDays. Returns oldest first:
- * [{ start, end, sleep (minutes), steps, restingHr, nights, stepDays, hrDays }]
+ * [{ start, end, sleep (minutes), steps, restingHr, spo2, spo2Min, resp, nights, stepDays, hrDays, spo2Days, respDays }]
  */
 export function weeklyMedians(days, today, weeks = 8) {
   const out = [];
@@ -50,10 +50,16 @@ export function weeklyMedians(days, today, weeks = 8) {
     const sleep = inWeek.map(d => d.health.sleep && !d.health.sleep.inBedOnly ? d.health.sleep.total : null).filter(v => v > 0);
     const steps = inWeek.map(d => d.health.steps).filter(v => Number.isFinite(v) && v > 0);
     const hr = inWeek.map(d => d.health.restingHr).filter(v => Number.isFinite(v) && v > 0);
+    const spo2 = inWeek.map(d => d.health.spo2).filter(v => Number.isFinite(v) && v > 0);
+    const spo2Min = inWeek.map(d => d.health.spo2Min).filter(v => Number.isFinite(v) && v > 0);
+    const resp = inWeek.map(d => d.health.respiratoryRate).filter(v => Number.isFinite(v) && v > 0);
     out.push({
       start, end,
       sleep: median(sleep), steps: steps.length ? Math.round(median(steps)) : null, restingHr: hr.length ? Math.round(median(hr)) : null,
-      nights: sleep.length, stepDays: steps.length, hrDays: hr.length,
+      // Oxygen: the middle of the daily averages, and the lowest value of the week.
+      spo2: spo2.length ? Math.round(median(spo2) * 10) / 10 : null, spo2Min: spo2Min.length ? Math.min(...spo2Min) : null,
+      resp: resp.length ? Math.round(median(resp) * 10) / 10 : null,
+      nights: sleep.length, stepDays: steps.length, hrDays: hr.length, spo2Days: spo2.length, respDays: resp.length,
     });
   }
   return out;

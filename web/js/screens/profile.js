@@ -4,7 +4,8 @@
 import { esc } from '../core/format.js';
 import { store } from '../core/ui.js';
 import { flushProfile, healthActions, healthInput, healthView, loadProfile } from './profile-health.js';
-import { loadSettings, settingsActions, settingsForms, settingsInput, settingsView } from './profile-settings.js';
+import { listsActions, listsForms } from './profile-lists.js';
+import { loadSettings, loadTags, settingsActions, settingsForms, settingsInput, settingsView } from './profile-settings.js';
 
 const VIEWS = [['health', 'My health'], ['settings', 'Settings']];
 let focusView = false;
@@ -27,7 +28,8 @@ export default {
       <div id="profile-content" class="profile-content">${html}</div>`;
   },
 
-  mounted() {
+  mounted(ctx) {
+    loadTags(ctx); // the Paperless tags load after the screen shows (only on Settings, with a token)
     // After a switch with the control, keep the focus on it.
     if (focusView) document.querySelector('.profile-views [aria-pressed="true"]')?.focus();
     focusView = false;
@@ -45,9 +47,10 @@ export default {
     },
     ...healthActions,
     ...settingsActions,
+    ...listsActions,
   },
 
-  forms: { ...settingsForms },
+  forms: { ...settingsForms, ...listsForms },
 
   input(el, e, ctx) {
     if (healthInput(el)) return;

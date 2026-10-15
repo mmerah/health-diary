@@ -1,7 +1,6 @@
 // The data model of the diary, in one place. Screens, forms and the report read these
 // definitions, so a new meal, drink or measurement type is added here only.
 import { hmToMin, isValidTime } from './dates.js';
-import { lines } from './format.js';
 
 export const LOG_VERSION = 2;
 
@@ -95,7 +94,8 @@ export const MEASUREMENTS = {
 
 /** Checks raw form values against the field limits, then parses them. Returns {value} or {error}. */
 export function parseMeasurement(type, raw) {
-  const def = MEASUREMENTS[type];
+  const def = measurementDef(type);
+  if (!def) return { error: 'This measurement type no longer exists.' };
   for (const f of def.fields) {
     const v = raw[f.key];
     if (v === '' || v == null) {
@@ -114,13 +114,6 @@ export function parseMeasurement(type, raw) {
 let seq = 0;
 export const newId = (prefix = 'm') => `${prefix}${Date.now().toString(36)}${(seq++).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
-/** Stable id for a medication that came from the old one-line-per-medication text. */
-function legacyMedId(line) {
-  let h = 5381;
-  for (const c of line) h = ((h << 5) + h + c.charCodeAt(0)) >>> 0;
-  return `l${h.toString(36)}`;
-}
-
 export const medLabel = m => [m.name, m.dose].filter(Boolean).join(' ');
 
 /** Medications that are scheduled (not "as needed") and active on a date. */
@@ -132,10 +125,7 @@ export const asNeededMeds = (profile, date) => (profile.medications || [])
 
 export function normalizeProfile(raw) {
   const p = { ...(raw || {}) };
-  if (typeof p.medications === 'string') {
-    p.medications = lines(p.medications).map(l => ({ id: legacyMedId(l), name: l, dose: '', since: '', until: '', asNeeded: false }));
-  }
-  p.medications = (p.medications || []).map(m => ({ id: m.id || newId(), name: m.name || '', dose: m.dose || '',
+  p.medications = (Array.isArray(p.medications) ? p.medications : []).map(m => ({ id: m.id || newId(), name: m.name || '', dose: m.dose || '',
     since: m.since || '', until: m.until || '', asNeeded: !!m.asNeeded }));
   return p;
 }
@@ -157,7 +147,7 @@ export function emptyLog() {
 const str = v => (typeof v === 'string' ? v : '');
 const time = v => (isValidTime(str(v)) ? str(v) : '');
 
-/** Any stored log (old or new format) → a complete version 2 log. Every reader calls this. */
+/** A stored log → a complete, safe log: missing parts are filled in, bad values dropped. Every reader calls this. */
 export function normalizeLog(raw) {
   const base = emptyLog();
   if (!raw) return base;
@@ -167,29 +157,27 @@ export function normalizeLog(raw) {
     log.meals[m.key] = { time: time(x.time), text: str(x.text) };
   }
   log.snacks = (raw.snacks || []).map(s => ({ time: time(s.time), text: str(s.text) }));
-  for (const d of DRINKS) {
-    const v = (raw.drinks || {})[d.key];
-    log.drinks[d.key] = v == null || v === '' ? null : Math.max(0, Math.round(Number(v)) || 0);
+  // Built-in drinks, plus the user's own counters (ids "c_…"; kept even when the counter is deleted later).
+  const keys = new Set([...DRINKS.map(d => d.key), ...Object.keys(raw.drinks || {}).filter(k => CUSTOM_ID.test(k))]);
+  for (const k of keys) {
+    const v = (raw.drinks || {})[k];
+    log.drinks[k] = v == null || v === '' ? null : Math.min(999, Math.max(0, Math.round(Number(v)) || 0));
   }
   const taken = (raw.meds || {}).taken || {};
   log.meds = {
-    taken: Object.fromEntries(Object.entries(taken).map(([k, v]) =>
-      // Version 1 stored {"<medication line>": true}.
-      typeof v === 'boolean' ? [legacyMedId(k), { done: v, time: '' }] : [k, { done: !!(v && v.done), time: time(v && v.time) }])),
+    taken: Object.fromEntries(Object.entries(taken).map(([k, v]) => [k, { done: !!(v && v.done), time: time(v && v.time) }])),
     extra: ((raw.meds || {}).extra || []).map(x => ({ name: str(x.name), time: time(x.time) })),
   };
   log.activities = str(raw.activities);
   log.notes = str(raw.notes);
-  log.symptoms = (raw.symptoms || []).map(s => (typeof s === 'string'
-    ? { name: s, severity: null, when: null, periods: [], from: '', to: '' }
-    : {
-      name: str(s.name),
-      severity: [1, 2, 3].includes(s.severity) ? s.severity : null,
-      when: ['day', 'periods', 'time'].includes(s.when) ? s.when : (s.time ? 'time' : null),
-      periods: (s.periods || []).filter(p => PERIODS.some(x => x.key === p)),
-      from: time(s.from || s.time),
-      to: time(s.to),
-    })).filter(s => s.name);
+  log.symptoms = (raw.symptoms || []).filter(s => s && typeof s === 'object').map(s => ({
+    name: str(s.name),
+    severity: [1, 2, 3].includes(s.severity) ? s.severity : null,
+    when: ['day', 'periods', 'time'].includes(s.when) ? s.when : null,
+    periods: (s.periods || []).filter(p => PERIODS.some(x => x.key === p)),
+    from: time(s.from),
+    to: time(s.to),
+  })).filter(s => s.name);
   return log;
 }
 
@@ -198,12 +186,12 @@ export function hasContent(log) {
   const l = normalizeLog(log);
   return !!(l.activities || l.notes || l.symptoms.length || l.snacks.length || l.meds.extra.length
     || Object.values(l.meds.taken).some(t => t.done)
-    || DRINKS.some(d => l.drinks[d.key] != null)
+    || Object.values(l.drinks).some(v => v != null)
     || MEALS.some(m => l.meals[m.key].text));
 }
 
-/** "7 water · 2 coffee · 0 alcohol" for the drinks that were recorded; '' when none was. */
-export const drinkSummary = drinks => DRINKS
+/** "7 water · 2 coffee · 0 alcohol · 3 tea" for the counters that were recorded; '' when none was. */
+export const drinkSummary = drinks => counterTypes({ all: true })
   .filter(d => drinks && drinks[d.key] != null)
   .map(d => `${drinks[d.key]} ${d.label.toLowerCase()}`)
   .join(' · ');
@@ -230,3 +218,101 @@ export function mergeHealth(old, fresh, syncedAt) {
   if (syncedAt) out.syncedAt = syncedAt;
   return out;
 }
+
+// ---------- The user's own catalog: symptoms, document types, measurements and counters
+// Built-in items stay and keep their special logic (blood pressure, BMI, the report's coffee and
+// alcohol links). The user adds their own items next to them. Own ids start with "c_".
+// main.js loads the catalog after login and calls setCatalog(); screens use the functions below.
+
+export const CUSTOM_ID = /^c_[a-z0-9]{2,24}$/;
+const MAX_ITEMS = 60;
+
+/** Ready-made measurements to add in one tap (normal limits are common adult values; the user can change them). */
+export const MEASUREMENT_PRESETS = [
+  { name: 'Blood glucose', unit: 'mmol/L', low: 3.9, high: 7.8, min: 0.5, max: 40, step: 0.1 },
+  { name: 'Blood glucose', unit: 'mg/dL', low: 70, high: 140, min: 10, max: 700, step: 1 },
+  { name: 'Oxygen (SpO2)', unit: '%', low: 95, high: null, min: 50, max: 100, step: 1 },
+  { name: 'Heart rate', unit: 'bpm', low: 50, high: 100, min: 20, max: 250, step: 1 },
+  { name: 'Peak flow', unit: 'L/min', low: null, high: null, min: 50, max: 900, step: 10 },
+  { name: 'INR', unit: '', low: 2, high: 3, min: 0.5, max: 10, step: 0.1 },
+  { name: 'Pain', unit: '/10', low: null, high: 4, min: 0, max: 10, step: 1 },
+  { name: 'Waist', unit: 'cm', low: null, high: null, min: 30, max: 250, step: 0.5 },
+];
+
+/** Ready-made counters next to water, coffee and alcohol. */
+export const COUNTER_PRESETS = [
+  { name: 'Tea', one: 'cup', many: 'cups' },
+  { name: 'Energy drink', one: 'can', many: 'cans' },
+  { name: 'Soft drink', one: 'glass', many: 'glasses' },
+  { name: 'Cigarettes', one: 'cigarette', many: 'cigarettes' },
+];
+
+export function emptyCatalog() {
+  return { v: 1, symptoms: [...SYMPTOMS], docTypes: { custom: [], hidden: [] }, measurements: [], counters: [] };
+}
+
+const text = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+const numOrNull = v => (v === '' || v == null || Number.isNaN(Number(v)) ? null : Number(v));
+
+/** Any stored catalog → a complete, safe one. Every reader goes through this. */
+export function normalizeCatalog(raw) {
+  const c = emptyCatalog();
+  if (!raw) return c;
+  if (Array.isArray(raw.symptoms)) {
+    c.symptoms = [...new Set(raw.symptoms.map(x => text(x, 100)).filter(Boolean))].slice(0, MAX_ITEMS);
+  }
+  const dt = raw.docTypes || {};
+  c.docTypes.custom = [...new Set((dt.custom || []).map(x => text(x, 60)).filter(x => x && !DOC_CATEGORIES.includes(x)))].slice(0, MAX_ITEMS);
+  c.docTypes.hidden = (dt.hidden || []).filter(x => DOC_CATEGORIES.includes(x) && x !== 'Other');
+  c.measurements = (raw.measurements || []).filter(m => m && CUSTOM_ID.test(m.id) && text(m.name, 60)).slice(0, MAX_ITEMS).map(m => {
+    const min = numOrNull(m.min) ?? 0, max = numOrNull(m.max) ?? 100000;
+    return { id: m.id, name: text(m.name, 60), unit: text(m.unit, 20), low: numOrNull(m.low), high: numOrNull(m.high),
+      min: Math.min(min, max), max: Math.max(min, max), step: numOrNull(m.step) || 0.1, hidden: !!m.hidden };
+  });
+  c.counters = (raw.counters || []).filter(x => x && CUSTOM_ID.test(x.id) && text(x.name, 40)).slice(0, MAX_ITEMS).map(x => ({
+    id: x.id, name: text(x.name, 40), one: text(x.one, 20) || 'time', many: text(x.many, 20) || 'times', hidden: !!x.hidden,
+  }));
+  return c;
+}
+
+let current = emptyCatalog();
+/** main.js calls this after login and after every catalog change. */
+export function setCatalog(raw) { current = normalizeCatalog(raw); return current; }
+export const getCatalog = () => current;
+
+const decimals = step => (String(step).split('.')[1] || '').length;
+
+/** A measurement definition (like MEASUREMENTS.weight) for one of the user's own measurements. */
+export function customMeasurementDef(m) {
+  const d = decimals(m.step);
+  const fmt = v => `${Number(v).toFixed(d)}${m.unit ? (m.unit.startsWith('/') ? m.unit : ` ${m.unit}`) : ''}`;
+  return {
+    label: m.name, unit: m.unit, custom: true, low: m.low, high: m.high,
+    fields: [{ key: 'v', label: m.unit || m.name, min: m.min, max: m.max, step: m.step, required: true }],
+    parse: f => ({ value: Math.round(Number(f.v) * 10 ** d) / 10 ** d }),
+    format: fmt,
+    flag: v => (m.low != null && v < m.low ? `Below your range (under ${fmt(m.low)})`
+      : m.high != null && v > m.high ? `Above your range (over ${fmt(m.high)})` : null),
+  };
+}
+
+/** All measurement types: built-in first, then the user's own (hidden ones only with all: true, for old values). */
+export function measurementTypes({ all = false } = {}) {
+  const out = { ...MEASUREMENTS };
+  for (const m of current.measurements) if (all || !m.hidden) out[m.id] = customMeasurementDef(m);
+  return out;
+}
+export const measurementDef = type => measurementTypes({ all: true })[type] || null;
+
+/** All counters on the Today screen: water, coffee, alcohol, then the user's own. */
+export function counterTypes({ all = false } = {}) {
+  return [...DRINKS, ...current.counters.filter(x => all || !x.hidden).map(x => ({ key: x.id, label: x.name, one: x.one, many: x.many, custom: true }))];
+}
+
+/** Document types to choose from: built-in ones that are not hidden, then the user's own. */
+export const docCategories = () => [...DOC_CATEGORIES.filter(x => !current.docTypes.hidden.includes(x)), ...current.docTypes.custom];
+/** True for built-in types. The AI report shows only these; own types become "Medical document". */
+export const isBuiltInDocType = t => DOC_CATEGORIES.includes(t);
+
+/** The one-tap symptom chips, in the user's order. */
+export const symptomChips = () => current.symptoms;

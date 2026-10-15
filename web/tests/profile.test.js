@@ -152,3 +152,83 @@ test('records: documents without a type, edited fields and changed fields', () =
   assert.deepEqual(suggestionDiff(docs[0]), [{ key: 'category', value: 'Imaging' }]); // the title was set by the user
   assert.deepEqual(changedFields(docs[1], { date: '2026-02-01', title: 'Lipids, fasting', category: 'Blood test' }), { title: 'Lipids, fasting' });
 });
+
+// ---------- My lists (profile-catalog.js)
+import { customId, docTypeError, docTypeUse, hasMeasurementPreset, moveItem, parseCounterForm, parseMeasurementForm, presetToCounter, presetToMeasurement, symptomError } from '../js/screens/profile-catalog.js';
+import { CUSTOM_ID, emptyCatalog, MEASUREMENT_PRESETS, COUNTER_PRESETS, normalizeCatalog } from '../js/core/schema.js';
+
+test('catalog: new ids match the server rule and are unique', () => {
+  const ids = new Set();
+  for (let i = 0; i < 200; i++) {
+    const id = customId([...ids]);
+    assert.match(id, CUSTOM_ID);
+    assert.ok(!ids.has(id));
+    ids.add(id);
+  }
+});
+
+test('catalog: presets become valid measurements and counters', () => {
+  const c = emptyCatalog();
+  const m = presetToMeasurement(MEASUREMENT_PRESETS[0], c);
+  assert.match(m.id, CUSTOM_ID);
+  assert.deepEqual({ ...m, id: 'x' }, { id: 'x', name: 'Blood glucose', unit: 'mmol/L', low: 3.9, high: 7.8, min: 0.5, max: 40, step: 0.1, hidden: false });
+  c.measurements.push(m);
+  assert.ok(hasMeasurementPreset(c, MEASUREMENT_PRESETS[0]));
+  assert.ok(!hasMeasurementPreset(c, MEASUREMENT_PRESETS[1])); // same name, other unit
+  const k = presetToCounter(COUNTER_PRESETS[0], c);
+  c.counters.push(k);
+  assert.notEqual(k.id, m.id);
+  // The server normalizer keeps them unchanged.
+  assert.deepEqual(normalizeCatalog(c).measurements[0], m);
+  assert.equal(normalizeCatalog(c).counters[0].many, 'cups');
+});
+
+test('catalog: move up and down', () => {
+  assert.deepEqual(moveItem(['a', 'b', 'c'], 1, -1), ['b', 'a', 'c']);
+  assert.deepEqual(moveItem(['a', 'b', 'c'], 1, 1), ['a', 'c', 'b']);
+  assert.deepEqual(moveItem(['a', 'b', 'c'], 0, -1), ['a', 'b', 'c']);
+  assert.deepEqual(moveItem(['a', 'b', 'c'], 2, 1), ['a', 'b', 'c']);
+});
+
+test('catalog: measurement form validation', () => {
+  const ok = { name: 'Glucose', unit: 'mmol/L', low: '3,9', high: '7.8', min: '0.5', max: '40', step: '0.1' };
+  assert.deepEqual(parseMeasurementForm(ok).value, { name: 'Glucose', unit: 'mmol/L', low: 3.9, high: 7.8, min: 0.5, max: 40, step: 0.1 });
+  assert.equal(parseMeasurementForm({ ...ok, name: ' ' }).field, 'name');
+  assert.equal(parseMeasurementForm({ ...ok, min: '50' }).field, 'max');
+  assert.equal(parseMeasurementForm({ ...ok, step: '0' }).field, 'step');
+  assert.equal(parseMeasurementForm({ ...ok, low: '8', high: '7' }).field, 'high');
+  assert.equal(parseMeasurementForm({ ...ok, high: '99' }).field, 'high');
+  assert.equal(parseMeasurementForm({ ...ok, low: 'abc' }).field, 'low');
+  assert.equal(parseMeasurementForm({ ...ok, low: '', high: '' }).value.low, null);
+});
+
+test('catalog: counters, symptoms and document types', () => {
+  assert.equal(parseCounterForm({ name: 'Tea', one: '', many: 'cups' }).field, 'one');
+  assert.deepEqual(parseCounterForm({ name: ' Tea ', one: 'cup', many: 'cups' }).value, { name: 'Tea', one: 'cup', many: 'cups' });
+  assert.match(symptomError('headache', ['Headache']), /already/);
+  assert.equal(symptomError('Cough', ['Headache']), '');
+  const c = emptyCatalog();
+  c.docTypes.custom = ['Dentist'];
+  assert.match(docTypeError('blood test', c), /already/);
+  assert.match(docTypeError('dentist', c), /already/);
+  assert.equal(docTypeError('Dentist', c, { except: 'Dentist' }), '');
+  assert.equal(docTypeUse([{ category: 'Dentist' }, { category: 'Other' }], 'Dentist'), 1);
+});
+
+// ---------- Paperless tags (profile-paperless.js)
+import { tagRows, tagsOf, tagsText, toggleTag } from '../js/screens/profile-paperless.js';
+
+test('paperless tags: default, text, rows and toggling', () => {
+  assert.deepEqual(tagsOf(null), ['medical']);
+  assert.deepEqual(tagsOf({ tags: [] }), ['medical']);
+  assert.deepEqual(tagsOf({ tags: [' health ', 'health', 'medical'] }), ['health', 'medical']);
+  assert.equal(tagsText(['medical']), 'tag medical');
+  assert.equal(tagsText(['medical', 'health', 'lab']), 'tags medical, health and lab');
+  const available = [{ name: 'Taxes', documentCount: 4 }, { name: 'medical', documentCount: 12 }, { name: 'Médecin', documentCount: '3' }];
+  assert.deepEqual(tagRows(available, ['medical']).map(r => [r.name, r.count, r.checked]),
+    [['Médecin', 3, false], ['medical', 12, true], ['Taxes', 4, false]]);
+  assert.deepEqual(tagRows(available, [], 'mede').map(r => r.name), ['Médecin']); // accents do not matter
+  assert.deepEqual(toggleTag(['medical'], 'health', true), ['medical', 'health']);
+  assert.deepEqual(toggleTag(['medical', 'health'], 'medical', false), ['health']);
+  assert.deepEqual(toggleTag(['medical'], 'medical', true), ['medical']);
+});

@@ -1,7 +1,8 @@
 // The sentences of the report, shared by the markdown and the HTML renderers.
 // Every function returns plain text. The HTML renderer escapes it.
 // h = { D(iso) → date text, T(text) → user text (redacted in AI mode), ai: boolean }
-import { DRINKS, MEASUREMENTS, PERIODS, severityLabel } from '../core/schema.js';
+import { PERIODS, severityLabel } from '../core/schema.js';
+import { counterList, measurementDefOf } from './stats.js';
 import { duration, num, plural } from '../core/format.js';
 
 export const pct = r => `${Math.round(r * 100)}%`;
@@ -17,7 +18,7 @@ export function severityWords(v) {
 export const sevShort = v => (v ? severityLabel(v).toLowerCase() : 'severity not set');
 
 export function measurementText(m) {
-  return MEASUREMENTS[m.type].format(m.value);
+  return measurementDefOf(m.type).format(m.value);
 }
 
 export const LEVEL_WORD = { high: 'High', caution: 'Check', info: 'Note' };
@@ -59,6 +60,14 @@ export function flagText(f, h) {
       const lab = x => (a.factor === 'coffee' ? `${x} of coffee` : a.factor === 'sleep' ? `${x} of sleep the night before` : x);
       return { area: T(a.symptom), text: `On ${a.a.with} of ${plural(a.a.days, 'day')} with ${lab(a.aLabel)}, on ${a.b.with} of ${plural(a.b.days, 'day')} with ${lab(a.bLabel)}. This is a pattern, not a cause.` };
     }
+    case 'custom-range': {
+      const parts = [f.above && `above your range on ${f.above} of ${plural(f.total, 'reading')}`, f.below && `below your range on ${f.below} of ${plural(f.total, 'reading')}`].filter(Boolean);
+      return { area: T(f.label), text: `${parts.join(', ').replace(/^./, c => c.toUpperCase())}. Highest: ${measurementText(f.worst)} on ${D(f.worst.date)}.` };
+    }
+    case 'oxygen-low-nights': return { area: 'Blood oxygen',
+      text: `Lowest value under 90 % on ${plural(f.days.length, 'day')}: ${f.days.slice(-6).map(x => `${D(x.date)} (${x.value} %)`).join(', ')}${f.days.length > 6 ? ' (last 6)' : ''}. Wearable estimate.` };
+    case 'oxygen-low-mean': return { area: 'Blood oxygen', text: `Average ${one(f.value)} % over the period (under 94 %). Wearable estimate.` };
+    case 'respiratory-high': return { area: 'Respiratory rate', text: `Average ${one(f.value)} breaths a minute over the period (above 20). Wearable estimate.` };
     case 'hr-up': return { area: 'Resting heart rate', text: `Median went up from ${Math.round(f.first)} to ${Math.round(f.last)} bpm (first 4 weeks, last 4 weeks).` };
     case 'sleep-down': return { area: 'Sleep', text: `Median sleep went down from ${duration(f.first)} to ${duration(f.last)} (first 4 weeks, last 4 weeks).` };
     default: return { area: f.kind, text: '' };
@@ -103,8 +112,8 @@ export function drinkText(d) {
   return parts.join(', ');
 }
 
-/** "6/3/0" for the compact table (water/coffee/alcohol), "–" when not recorded. */
-export const drinksShort = drinks => (drinks ? DRINKS.map(d => (drinks[d.key] == null ? '–' : drinks[d.key])).join('/') : '');
+/** "6/3/0/1" for the compact AI table: the counters in `list` order, "–" when not recorded. */
+export const drinksShort = (drinks, list = counterList()) => (drinks ? list.map(d => (drinks[d.key] == null ? '–' : drinks[d.key])).join('/') : '');
 
 export function adherenceText(m) {
   if (!m.eligible) return 'no diary days while it was active';

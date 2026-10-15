@@ -3,7 +3,7 @@ import { today as todayIso, pad } from '../core/dates.js';
 import { mergeHealth } from '../core/schema.js';
 import { seed, DEMO_USER } from './sample.js';
 
-const KEY = 'health-diary-demo-v3';
+const KEY = 'health-diary-demo-v4';
 const clone = o => (o == null ? o : structuredClone(o));
 const demoOnly = () => { throw new Error('Not available in the demo.'); };
 
@@ -29,7 +29,8 @@ export class MockApi {
   changePassword = demoOnly;
   async createIngestToken() { return { token: 'demo-key-not-real' }; }
   async revokeIngestToken() {}
-  async getPaperless() { return { available: false, url: '', tag: 'medical', hasToken: false, tokenFromServer: false }; }
+  async getPaperless() { return { available: false, url: '', tags: ['medical'], hasToken: false, missingTags: [] }; }
+  listPaperlessTags = demoOnly;
   savePaperless = demoOnly;
   async dismissNotice() {}
   async deleteMe() { await this.resetDemo(); }
@@ -102,6 +103,8 @@ export class MockApi {
   retryDocument = demoOnly;
   documentFileUrl() { return ''; }
 
+  async getCatalog() { return clone(this.db.catalog || null); }
+  async saveCatalog(c) { this.db.catalog = clone(c); this.persist(); return clone(c); }
   async getSettings() { return clone(this.db.settings); }
   async saveSettings(s) {
     const { lastSync, ...rest } = s || {}; // lastSync is managed by the "server"
@@ -119,7 +122,7 @@ export class MockApi {
     this.db.health[today] = mergeHealth(old, {
       sleep: { total: 412, deep: 64, rem: 95, core: 253, awake: 21, bed: '23:35', wake: '06:28', naps: [], inBedOnly: false },
       steps: Math.max((old && old.steps) || 0, Math.round(Math.max(0, minutes - 390) * 9.5) + 140),
-      restingHr: 58, hrv: 47,
+      restingHr: 58, hrv: 47, spo2: 97.2, spo2Min: 93, respiratoryRate: 14.1,
       workouts: minutes > 12 * 60 + 40 ? [{ type: 'Walking', minutes: 24, start: '12:15' }] : [],
     }, stamp);
     this.db.settings.lastSync = stamp;

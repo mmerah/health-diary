@@ -4,11 +4,11 @@
 import { addDays, label, nowHm, today as todayIso } from '../core/dates.js';
 import { esc } from '../core/format.js';
 import {
-  DRINKS, MEALS, MEASUREMENTS, PERIODS, activeMeds, asNeededMeds, drinkSummary, mealAt, medLabel, normalizeLog, normalizeProfile, periodOf,
+  MEALS, PERIODS, activeMeds, asNeededMeds, counterTypes, drinkSummary, mealAt, measurementDef, measurementTypes, medLabel, normalizeLog, normalizeProfile, periodOf,
 } from '../core/schema.js';
 import { ICON, closeSheet, openSheet, toast } from '../core/ui.js';
 import { appendMeal, appendNote, checkMeasurement, mealTime, newSymptom, recentMeals, stepDrink } from './today-model.js';
-import { SEV_OPTIONS, radios } from './today-view.js';
+import { SEV_OPTIONS, drinksTitle, radios } from './today-view.js';
 import { forgetSymptomOrder, loadSymptomOrder, saveOtherDay } from './today.js';
 
 const TILES = [
@@ -17,6 +17,22 @@ const TILES = [
   ['weight', 'Weight', ICON.scale], ['bp', 'Blood pressure', ICON.heart], ['temp', 'Temperature', ICON.thermo],
 ];
 const TITLES = Object.fromEntries(TILES.map(([k, l]) => [k, l]));
+const MAX_OWN_TILES = 3; // more own measurements: one "More measurements" tile with a list
+
+/** The user's own measurement types that are not hidden: [[type, def]]. */
+const ownMeasurements = () => Object.entries(measurementTypes()).filter(([, d]) => d.custom);
+const isMeasure = view => !!measurementDef(view);
+const titleOf = view => (view === 'drink' ? drinksTitle()
+  : view === 'more' ? 'More measurements' : TITLES[view] || (measurementDef(view) || {}).label || 'Quick add');
+
+/** Tiles: the fixed ones, then one per own measurement (or "More measurements"). */
+function tiles() {
+  const list = TILES.map(([k, l, icon]) => [k, k === 'drink' && drinksTitle() !== 'Drinks' ? drinksTitle() : l, icon]);
+  const own = ownMeasurements();
+  if (own.length > MAX_OWN_TILES) list.push(['more', 'More measurements', ICON.plus]);
+  else own.forEach(([type, def]) => list.push([type, def.label, ICON.scale]));
+  return list;
+}
 
 /** "Tue 7 Oct". */
 const dayName = d => label(d).replace(',', '');
@@ -47,7 +63,7 @@ export function openQuickAdd(ctx, preset) {
   });
   q.root = body.querySelector('[data-qa]');
   q.root.addEventListener('keydown', onKeydown);
-  show(q, TITLES[preset] ? preset : 'home');
+  show(q, TITLES[preset] || (preset && isMeasure(preset)) ? preset : 'home');
 }
 
 // ---------- Drawing
@@ -56,7 +72,8 @@ function show(q, view) {
   if (q.form && q.form.ops && q.form.ops.length) saveDrinks(q).catch(reportError); // leaving the Drink view
   q.view = view;
   q.form = {};
-  q.root.innerHTML = view === 'home' ? home(q) : `${back(view)}<div class="qa-body" data-qa-body>${forms[view](q)}</div>`;
+  const form = forms[view] || (isMeasure(view) ? x => measureForm(x, view) : null);
+  q.root.innerHTML = view === 'home' || !form ? home(q) : `${back(view)}<div class="qa-body" data-qa-body>${form(q)}</div>`;
   const first = q.root.querySelector('[autofocus]')
     || q.root.querySelector(view === 'home' ? '.qa-tile' : '.qa-body button')
     || q.root.querySelector('.qa-head button');
@@ -68,16 +85,17 @@ function show(q, view) {
   } else if (first) first.focus();
   q.initialFocus = first; // loaders move focus to their content only if it is still here
   if (loaders[view]) loaders[view](q);
+  else if (isMeasure(view)) lastValue(q, view);
 }
 
 function home(q) {
   return `<p class="hint">${esc(q.isToday ? 'What do you want to add?' : `This adds to ${label(q.date, { weekday: 'long', day: 'numeric', month: 'long' })}.`)}</p>
-    <div class="qa-tiles">${TILES.map(([k, l, icon]) => `<button type="button" class="qa-tile" data-act="view" data-v="${esc(k)}">${icon}<span>${esc(l)}</span></button>`).join('')}</div>`;
+    <div class="qa-tiles">${tiles().map(([k, l, icon]) => `<button type="button" class="qa-tile" data-act="view" data-v="${esc(k)}">${icon}<span>${esc(l)}</span></button>`).join('')}</div>`;
 }
 
 function back(view) {
   return `<div class="qa-head"><button type="button" class="icon-btn" data-act="view" data-v="home" aria-label="Back to all types">${ICON.left}</button>
-    <h3>${esc(TITLES[view])}</h3></div>`;
+    <h3>${esc(titleOf(view))}</h3></div>`;
 }
 
 const timeField = (q, value = q.isToday ? nowHm() : '') => `<label class="field"><span>Time</span>
@@ -113,7 +131,7 @@ const forms = {
   drink(q) {
     q.form.ops = [];
     return `<p class="hint">${esc(`Each tap saves at once${q.isToday ? '' : ` to ${q.dayLabel}`}.`)}</p>
-      <ul class="drink-list qa-drink-list">${DRINKS.map(d => `<li class="drink" data-drink="${esc(d.key)}">
+      <ul class="drink-list qa-drink-list">${counterTypes().map(d => `<li class="drink" data-drink="${esc(d.key)}">
         <span class="drink-name">${esc(d.label)}<span class="drink-val is-empty" data-now="${esc(d.key)}" aria-live="polite">Loading…</span></span>
         <span class="stepper">
           <button type="button" class="icon-btn step" data-act="qd" data-v="${esc(d.key)}" data-d="-1" aria-label="${esc(`One ${d.one} less of ${d.label.toLowerCase()}`)}">${ICON.minus}</button>
@@ -149,9 +167,9 @@ const forms = {
       ${saveBtn()}
     </form>`;
   },
-  weight: q => measureForm(q, 'weight'),
-  bp: q => measureForm(q, 'bp'),
-  temp: q => measureForm(q, 'temp'),
+  more() {
+    return `<div class="qa-list">${ownMeasurements().map(([type, def]) => `<button type="button" class="btn" data-act="view" data-v="${esc(type)}">${ICON.plus}<span>${esc(def.label)}${def.unit ? `<span class="sub"> · ${esc(def.unit)}</span>` : ''}</span></button>`).join('')}</div>`;
+  },
 };
 
 function whenOptions(q) {
@@ -160,8 +178,10 @@ function whenOptions(q) {
 }
 
 function measureForm(q, type) {
-  const def = MEASUREMENTS[type];
-  const fields = def.fields.map((f, i) => `<label class="field"><span>${esc(f.key === 'kg' || f.key === 'c' ? `${def.label} (${f.label})` : f.label)}${f.required ? '' : ' <span class="muted">(optional)</span>'}</span>
+  const def = measurementDef(type);
+  // One-field types read "Weight (kg)", "Back pain (/10)"; blood pressure reads Sys, Dia, Pulse.
+  const single = def.fields.length === 1;
+  const fields = def.fields.map((f, i) => `<label class="field"><span>${esc(single ? (f.label && f.label !== def.label ? `${def.label} (${f.label})` : def.label) : f.label)}${f.required ? '' : ' <span class="muted">(optional)</span>'}</span>
       <input type="text" name="${esc(f.key)}" inputmode="${f.step < 1 ? 'decimal' : 'numeric'}" autocomplete="off" aria-describedby="qa-err"${i === 0 ? ' autofocus' : ''} data-field="${esc(f.key)}"></label>`).join('');
   return `<form class="stack" data-form="log-measure" data-type="${esc(type)}" novalidate>
     <div class="qa-fields">${fields}</div>
@@ -227,9 +247,6 @@ const loaders = {
     const first = box.querySelector('button, input');
     if (first && (document.activeElement === q.initialFocus || !q.root.contains(document.activeElement))) first.focus();
   },
-  async weight(q) { return lastValue(q, 'weight'); },
-  async bp(q) { return lastValue(q, 'bp'); },
-  async temp(q) { return lastValue(q, 'temp'); },
 };
 
 async function lastValue(q, type) {
@@ -237,7 +254,7 @@ async function lastValue(q, type) {
     const list = await q.ctx.api.listMeasurements(type, addDays(q.date, -365), q.date);
     const last = list[list.length - 1];
     const el = q.view === type && q.root.querySelector('[data-last]');
-    if (last && el) el.textContent = `Last: ${MEASUREMENTS[type].format(last.value)} on ${label(last.date, { day: 'numeric', month: 'short' })}.`;
+    if (last && el) el.textContent = `Last: ${measurementDef(type).format(last.value)} on ${label(last.date, { day: 'numeric', month: 'short' })}.`;
   } catch (e) { /* only a hint */ }
 }
 
@@ -264,7 +281,7 @@ const drinkCount = (d, v) => (v == null ? 'Not recorded' : v === 0 ? 'None' : `$
 
 /** Live counts in the Drink view. */
 function showDrinks(q) {
-  for (const d of DRINKS) {
+  for (const d of counterTypes({ all: true })) {
     const v = q.form.drinks ? q.form.drinks[d.key] : undefined;
     const val = q.root.querySelector(`[data-now="${d.key}"]`), n = q.root.querySelector(`[data-num="${d.key}"]`);
     if (!val) continue;
@@ -490,7 +507,7 @@ async function onSubmit(q, form) {
     }
     case 'log-measure': {
       const type = form.dataset.type;
-      const def = MEASUREMENTS[type];
+      const def = measurementDef(type);
       const raw = Object.fromEntries(def.fields.map(f => [f.key, v(f.key)]));
       const res = checkMeasurement(type, raw);
       if (res.error) return fieldError(q, res.error, form.elements[res.field || def.fields[0].key]);

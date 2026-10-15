@@ -41,27 +41,20 @@ test('schema: meal and part of the day for a time', () => {
   assert.equal(periodOf('23:00'), 'night');
 });
 
-test('schema: version 1 logs become version 2', () => {
-  const old = {
+test('schema: a stored log is completed and cleaned', () => {
+  const log = normalizeLog({
     meals: { breakfast: { time: '07:30', text: 'Eggs' } },
     drinks: { water: 3, coffee: 0 },
-    meds: { taken: { 'Magnesium 300 mg, evening': true } },
-    symptoms: ['Headache', { name: 'Fatigue', severity: 2, time: '15:00' }],
+    meds: { taken: { mag: { done: true, time: '21:05' }, vitd: { done: 'yes', time: '25:00' } } },
+    symptoms: [{ name: 'Fatigue', severity: 2, when: 'time', from: '15:00' }, 'Headache', null],
     feeling: 6,
-  };
-  const log = normalizeLog(old);
-  assert.equal(log.v, 2);
+  });
   assert.deepEqual(log.meals.lunch, { time: '', text: '' });
-  assert.equal(log.drinks.water, 3);
-  assert.equal(log.drinks.coffee, 0);
-  assert.equal(log.drinks.alcohol, null); // not recorded, not zero
-  assert.equal(log.symptoms[0].severity, null);
-  assert.deepEqual([log.symptoms[1].when, log.symptoms[1].from], ['time', '15:00']);
+  assert.deepEqual([log.drinks.water, log.drinks.coffee, log.drinks.alcohol], [3, 0, null]); // null = not recorded
+  assert.deepEqual(log.meds.taken, { mag: { done: true, time: '21:05' }, vitd: { done: true, time: '' } });
+  assert.deepEqual(log.symptoms.map(s => [s.name, s.when, s.from]), [['Fatigue', 'time', '15:00']]);
   assert.equal(log.feeling, undefined);
-  // The old medication line and the migrated profile medication share one id.
-  const profile = normalizeProfile({ medications: 'Magnesium 300 mg, evening\n\nVitamin D' });
-  assert.equal(profile.medications.length, 2);
-  assert.deepEqual(log.meds.taken[profile.medications[0].id], { done: true, time: '' });
+  assert.deepEqual(normalizeProfile({ medications: 'not a list' }).medications, []);
 });
 
 test('schema: bad values are dropped, not trusted', () => {
@@ -108,4 +101,32 @@ test('schema: a sync keeps values corrected by hand', () => {
   assert.equal(h.steps, 5000);
   assert.equal(h.restingHr, 58);
   assert.equal(h.syncedAt, '2026-10-14T08:00');
+});
+
+test('catalog: own items next to the built-in ones', async () => {
+  const S = await import('../js/core/schema.js');
+  S.setCatalog({
+    symptoms: ['Aura', 'Aura', ' Light sensitivity ', ''],
+    docTypes: { custom: ['Dentist', 'Blood test'], hidden: ['Vaccination', 'Other', 'Nope'] },
+    measurements: [{ id: 'c_glu', name: 'Blood glucose', unit: 'mmol/L', low: 3.9, high: 7.8, min: 0.5, max: 40, step: 0.1 },
+      { id: 'bad id', name: 'X' }],
+    counters: [{ id: 'c_tea', name: 'Tea', one: 'cup', many: 'cups' }],
+  });
+  const c = S.getCatalog();
+  assert.deepEqual(c.symptoms, ['Aura', 'Light sensitivity']);
+  assert.deepEqual(c.docTypes, { custom: ['Dentist'], hidden: ['Vaccination'] }); // "Other" cannot be hidden
+  assert.ok(S.docCategories().includes('Dentist') && !S.docCategories().includes('Vaccination'));
+  assert.ok(!S.isBuiltInDocType('Dentist') && S.isBuiltInDocType('Blood test'));
+  assert.equal(c.measurements.length, 1);
+  assert.deepEqual(Object.keys(S.measurementTypes()), ['weight', 'bp', 'temp', 'c_glu']);
+  assert.deepEqual(S.parseMeasurement('c_glu', { v: '8,24' }), { value: 8.2 });
+  assert.match(S.parseMeasurement('c_glu', { v: '50' }).error, /0.5 to 40/);
+  assert.equal(S.measurementDef('c_glu').flag(8.2), 'Above your range (over 7.8 mmol/L)');
+  assert.equal(S.measurementDef('c_glu').flag(5), null);
+  assert.equal(S.parseMeasurement('c_gone', { v: '1' }).error, 'This measurement type no longer exists.');
+  assert.deepEqual(S.counterTypes().map(x => x.key), ['water', 'coffee', 'alcohol', 'c_tea']);
+  const log = S.normalizeLog({ drinks: { water: 2, c_tea: 3, c_old: 1, evil: 5 } });
+  assert.deepEqual(log.drinks, { water: 2, coffee: null, alcohol: null, c_tea: 3, c_old: 1 });
+  assert.equal(S.drinkSummary(log.drinks), '2 water · 3 tea');
+  S.setCatalog(null);
 });

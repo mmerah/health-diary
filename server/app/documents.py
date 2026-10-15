@@ -13,23 +13,27 @@ import os
 import queue
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 import threading
 import time
 from datetime import datetime
 
+from cryptography.fernet import InvalidToken
+
 from . import crypto, db, paperless, suggest
 from .health import TZ
 
 log = logging.getLogger("uvicorn.error")
 
-MAX_DOC_MB = int(os.environ.get("MAX_DOC_MB", "25"))
-MAX_PAGES = 50
-OCR_WORKERS = max(1, int(os.environ.get("OCR_WORKERS", "1")))
-OCR_LANGS = os.environ.get("OCR_LANGS", "eng+fra+deu")
-OCR_MEMORY_MB = int(os.environ.get("OCR_MEMORY_MB", "1024"))
-PAGE_TIMEOUT, TOTAL_TIMEOUT = 120, 600  # seconds
+MAX_DOC_MB = 200
+MAX_PAGES = 300
+OCR_WORKERS = 1  # one document at a time: OCR uses a full CPU core
+OCR_LANGS = "eng+fra+deu"  # the languages installed in the image
+OCR_MEMORY_MB = 1024  # for each run of a tool
+PAGE_TIMEOUT = 120  # seconds for each tool run (one page)
+TOTAL_TIMEOUT = 2 * 60 * 60  # seconds for one document: 300 scanned pages take about 30 minutes
 MIN_PAGE_TEXT = 40  # a PDF page with less text is probably a scan: read it with OCR
 
 KINDS = {"pdf": ("application/pdf", "pdf"), "jpeg": ("image/jpeg", "jpg"),
@@ -71,20 +75,68 @@ def file_path(uid, doc_id):
     return folder(uid) / f"{doc_id}.bin"
 
 
+# File format: MAGIC, then chunks of [4-byte length][Fernet token]. Each token holds the chunk
+# number, a "last chunk" flag and up to 4 MB of the file. So a 200 MB file never sits in memory,
+# and a file with chunks removed, cut or swapped is refused, not misread.
+MAGIC, CHUNK = b"HDF1", 4 * 1024 * 1024
+
+
+class Damaged(Exception):
+    """The stored file is cut, changed, or the key is not the right one."""
+
+
 def store_file(uid, doc_id, src):
     """Encrypts the file at `src` into the user's folder."""
-    with open(src, "rb") as f:
-        blob = crypto.encrypt_bytes(f.read())
     dest = file_path(uid, doc_id)
     tmp = dest.with_suffix(".part")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "wb") as f:
-        f.write(blob)
+    with open(src, "rb") as f, os.fdopen(fd, "wb") as out:
+        out.write(MAGIC)
+        index, data = 0, f.read(CHUNK)
+        while True:
+            following = f.read(CHUNK) if data else b""
+            last = not following
+            token = crypto.encrypt_bytes(struct.pack(">QB", index, last) + data)
+            out.write(struct.pack(">I", len(token)) + token)
+            if last:
+                break
+            index, data = index + 1, following
     tmp.replace(dest)
 
 
+def iter_file(uid, doc_id):
+    """Yields the decrypted file in chunks. Raises Damaged."""
+    try:
+        with open(file_path(uid, doc_id), "rb") as f:
+            if f.read(4) != MAGIC:
+                raise Damaged("not a diary file")
+            index = 0
+            while True:
+                head = f.read(4)
+                if len(head) != 4:
+                    raise Damaged("cut")
+                plain = crypto.decrypt_bytes(f.read(struct.unpack(">I", head)[0]))
+                number, last = struct.unpack(">QB", plain[:9])
+                if number != index:
+                    raise Damaged("chunks in the wrong order")
+                yield plain[9:]
+                if last:
+                    if f.read(1):
+                        raise Damaged("data after the last chunk")
+                    return
+                index += 1
+    except (InvalidToken, struct.error) as e:
+        raise Damaged(repr(e)) from None
+
+
 def read_file(uid, doc_id):
-    return crypto.decrypt_bytes(file_path(uid, doc_id).read_bytes())
+    return b"".join(iter_file(uid, doc_id))
+
+
+def copy_file(uid, doc_id, out):
+    """Writes the decrypted file to the open file `out`."""
+    for chunk in iter_file(uid, doc_id):
+        out.write(chunk)
 
 
 def remove_file(uid, doc_id):
@@ -179,7 +231,7 @@ def process(doc_id):
         src = work / f"doc.{ext}"
         fd = os.open(src, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "wb") as f:
-            f.write(read_file(doc["user_id"], doc_id))
+            copy_file(doc["user_id"], doc_id, f)
         text, pages = extract(doc["kind"], src, work, time.monotonic() + TOTAL_TIMEOUT)
         found = suggest.suggest(text)
         db.update_document(doc_id, status="ready", error=None, pages=pages,

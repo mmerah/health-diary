@@ -1,5 +1,6 @@
 """Health Diary server: the JSON API for the web app, the shortcut endpoint, and the web app itself."""
 import asyncio
+import itertools
 import json
 import logging
 import os
@@ -15,17 +16,16 @@ from pathlib import Path
 from urllib.parse import quote
 from xml.etree.ElementTree import ParseError
 
-from cryptography.fernet import InvalidToken
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from python_multipart.multipart import MultipartParser, parse_options_header
 from starlette.background import BackgroundTask
 
-from . import auth, crypto, db, documents, health, models, paperless
+from . import auth, catalog, crypto, db, documents, health, models, paperless
 
 VERSION = os.environ.get("APP_VERSION", "dev")
 COMMIT = os.environ.get("APP_COMMIT", "")
@@ -33,9 +33,7 @@ BUILT = os.environ.get("APP_BUILT", "")
 WEB_DIR = Path(os.environ.get("WEB_DIR", Path(__file__).resolve().parents[2] / "web"))
 DATE = r"^\d{4}-\d{2}-\d{2}$"
 DEFAULT_SETTINGS = {"lastSync": None, "redactWords": [], "excludedDocs": []}
-API_DOCS = os.environ.get("ENABLE_API_DOCS", "").lower() == "true"
 MAX_JSON = 1024 * 1024
-MAX_IMPORT_MB = int(os.environ.get("MAX_IMPORT_MB", "2048"))
 IMPORT_PATH = "/api/import/apple-health"
 INGEST_PATH = "/api/ingest/health"
 DOCUMENTS_PATH = "/api/documents"
@@ -69,14 +67,8 @@ async def lifespan(_app):
         log.warning("TZ is not set. Days start at midnight UTC. Set TZ in .env, for example TZ=Europe/Paris.")
     db.init()
     crypto.init()
-    paperless.encrypt_old_tokens()
-    paperless.check_env()
     db.purge_sessions()
-    fixed = os.environ.get("SETUP_CODE", "").strip()  # "SETUP_CODE=" in .env means: not set
-    if fixed and not auth.strong_enough(fixed):
-        log.error("SETUP_CODE is too weak. Use at least 16 letters or digits, or remove it to get a random code.")
-        raise RuntimeError("SETUP_CODE is too weak.")
-    SETUP_CODE = fixed or auth.new_setup_code()
+    SETUP_CODE = auth.new_setup_code()
     show_setup_code()
     documents.start()
     task = asyncio.create_task(purge_sessions_hourly())
@@ -86,8 +78,7 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="Health Diary", version=VERSION, lifespan=lifespan,
-              docs_url="/api/docs" if API_DOCS else None, redoc_url=None,
-              openapi_url="/api/openapi.json" if API_DOCS else None)
+              docs_url=None, redoc_url=None, openapi_url=None)
 
 User = Depends(auth.current_user)
 Admin = Depends(auth.admin_user)
@@ -132,8 +123,7 @@ async def security(request: Request, call_next):
             return JSONResponse({"detail": "Request refused. It did not come from this app."}, status_code=403)
     response = await call_next(request)
     # A route may set a stricter policy (stored document files: sandbox).
-    if not (API_DOCS and request.url.path in ("/api/docs", "/api/openapi.json")):
-        response.headers.setdefault("Content-Security-Policy", CSP)
+    response.headers.setdefault("Content-Security-Policy", CSP)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers.setdefault("X-Frame-Options", "DENY")
@@ -160,15 +150,15 @@ class BodyLimit:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         if scope["path"] == IMPORT_PATH:
-            limit_mb = MAX_IMPORT_MB
-        elif scope["path"] == DOCUMENTS_PATH and scope["method"] == "POST":
-            limit_mb = documents.MAX_DOC_MB
+            # No size limit: an Apple Health export can be many GB. The free disk space is checked
+            # instead (receive_upload).
+            return await self.app(scope, receive, send)
+        if scope["path"] == DOCUMENTS_PATH and scope["method"] == "POST":
+            # Multipart adds a few hundred bytes around the file, and the optional fields.
+            limit = documents.MAX_DOC_MB * 1024 * 1024 + 64 * 1024
+            message = f"The file is too large. The limit is {documents.MAX_DOC_MB} MB."
         else:
-            limit_mb = None
-        # Multipart adds a few hundred bytes around the file, and the optional fields.
-        limit = limit_mb * 1024 * 1024 + 64 * 1024 if limit_mb else MAX_JSON
-        message = (f"The file is too large. The limit is {limit_mb} MB." if limit_mb
-                   else "The request is too large.")
+            limit, message = MAX_JSON, "The request is too large."
         length = dict(scope["headers"]).get(b"content-length")
         if length is not None and (not length.isdigit() or int(length) > limit):
             return await JSONResponse({"detail": message}, status_code=413)(scope, receive, send)
@@ -298,8 +288,19 @@ def get_paperless(user=User):
 
 @app.put("/api/me/paperless")
 def put_paperless(body: models.PaperlessSettings, user=User):
-    paperless.save_config(user["id"], token=body.token, tag=body.tag)
+    paperless.save_config(user["id"], token=body.token, tags=body.tags)
     return paperless.public_config(user["id"])
+
+
+@app.get("/api/me/paperless/tags")
+def paperless_tags(user=User):
+    """All tags in your Paperless, with their number of documents, to choose from."""
+    try:
+        return paperless.tag_list(user["id"])
+    except paperless.NotSetUp as e:
+        raise HTTPException(400, str(e)) from None
+    except paperless.PaperlessError as e:
+        raise HTTPException(502, str(e)) from None
 
 
 def _build_export(user, path):
@@ -313,7 +314,8 @@ def _build_export(user, path):
         "user": {"username": user["username"], "isAdmin": user["isAdmin"], "createdAt": user["createdAt"]},
         "profile": db.get_kv(uid, "profile", {}),
         "settings": get_settings(user),
-        "paperless": {"tag": paperless.user_config(uid)[1],
+        "catalog": catalog.get(uid),
+        "paperless": {"tags": paperless.user_config(uid)[1],
                       "documentSettings": db.get_kv(uid, documents.META_KEY, {})},
         "days": db.list_days(uid),
         "measurements": db.list_measurements(uid),
@@ -323,8 +325,9 @@ def _build_export(user, path):
         z.writestr("data.json", json.dumps(data, ensure_ascii=False, indent=1))
         for d in docs:
             try:
-                z.writestr(files[d["id"]], documents.read_file(uid, d["id"]), compress_type=zipfile.ZIP_STORED)
-            except (OSError, InvalidToken) as e:
+                with z.open(zipfile.ZipInfo(files[d["id"]]), "w", force_zip64=True) as out:  # stored, not packed
+                    documents.copy_file(uid, d["id"], out)
+            except (OSError, documents.Damaged) as e:
                 log.warning("Export: document d%s not readable: %r", d["id"], e)
 
 
@@ -427,7 +430,7 @@ def delete_user(uid: int, me=Admin):
 # ---------- Profile and settings
 
 def base_version(value: str | None = Header(None, alias="X-Base-Version")):
-    """The version the device started from. Without it, a save is not checked (older clients)."""
+    """The version the device started from. Without it, a save is not checked."""
     if value is None:
         return None
     if not value.strip().isdigit():
@@ -464,6 +467,19 @@ def get_settings(user=User):
 def put_settings(changes: models.Settings, user=User):
     """Merges the given keys into the settings. lastSync is set by the server only."""
     db.update_kv(user["id"], "settings", changes.model_dump(exclude_unset=True, exclude_none=True, exclude={"lastSync"}))
+
+
+# ---------- The user's own catalog
+
+@app.get("/api/catalog")
+def get_catalog(user=User):
+    """The user's own symptoms, document types, measurements and counters, or null (defaults)."""
+    return catalog.get(user["id"])
+
+
+@app.put("/api/catalog")
+def put_catalog(body: models.Catalog, user=User):
+    return catalog.save(user["id"], body)
 
 
 # ---------- Days
@@ -504,6 +520,12 @@ def list_measurements(mtype: str = Query("", alias="type"), date_from: str = Que
 
 @app.post("/api/measurements", status_code=201)
 def add_measurement(m: models.MeasurementIn, user=User):
+    if isinstance(m, models.CustomIn):
+        own = catalog.measurement(user["id"], m.type)
+        if not own:
+            raise HTTPException(400, "This measurement is not in your list.")
+        if not own["min"] <= m.value <= own["max"]:
+            raise HTTPException(400, f"Use a value from {own['min']:g} to {own['max']:g} for {own['name']}.")
     value = m.model_dump()["value"]
     return db.add_measurement(user["id"], m.type, m.date, m.time or None, value, "manual")
 
@@ -522,6 +544,11 @@ def list_documents(refresh: bool = False, user=User):
     return documents.list_all(user["id"], refresh)
 
 
+def check_doc_type(uid, category):
+    if category and category not in catalog.doc_types(uid):
+        raise HTTPException(400, "This document type is not in your list. Add it in Profile first.")
+
+
 def _upload_document(uid, path, fields, work):
     filename = fields.pop("filename", "")
     try:
@@ -529,6 +556,7 @@ def _upload_document(uid, path, fields, work):
     except ValidationError as e:
         names = ", ".join(sorted({str(err["loc"][0]) for err in e.errors() if err.get("loc")}))
         raise HTTPException(400, f"Some values are not valid: {names}.") from None
+    check_doc_type(uid, meta.category)
     try:
         kind, pages = documents.check_upload(path, work)
     except documents.Refused as e:
@@ -594,6 +622,7 @@ def patch_document(doc_id: str, body: models.DocumentPatch, user=User):
     """Changes date, title or category. For Paperless documents, the change stays in the diary
     (Paperless is never changed); null gives back the Paperless value."""
     changes = {k: getattr(body, k) for k in body.model_fields_set}
+    check_doc_type(user["id"], changes.get("category"))
     pid = documents.paperless_id(doc_id)
     if pid is not None:
         _paperless_doc(user["id"], pid)
@@ -644,14 +673,16 @@ def document_file(doc_id: str, user=User):
     """The original file. Images get a sandbox policy. PDFs get a strict policy without sandbox,
     because browsers do not show PDFs in a sandboxed page; PDF viewers do not run page scripts."""
     doc = _diary_doc(user["id"], doc_id)
+    chunks = documents.iter_file(user["id"], doc["id"])
     try:
-        data = documents.read_file(user["id"], doc["id"])
-    except (OSError, InvalidToken) as e:
+        first = next(chunks)  # fails here, before the answer starts, if the file cannot be read
+    except (OSError, documents.Damaged) as e:
         log.warning("Document %s cannot be read: %r", doc_id, e)
         raise HTTPException(500, "This file cannot be read. Was DIARY_SECRET_KEY changed?") from None
     media, _ = documents.KINDS[doc["kind"]]
     name = documents.safe_name(doc["title"], doc["kind"])
-    return Response(data, media_type=media, headers={
+    return StreamingResponse(itertools.chain([first], chunks), media_type=media, headers={
+        "Content-Length": str(doc["size"]),
         "Content-Disposition": f'inline; filename="{name}"',
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",
@@ -731,15 +762,32 @@ class _Upload:
         self.in_file, self.in_field = False, None
 
 
+NO_ROOM = "There is not enough free disk space on the server for this file. Ask the administrator."
+
+
+def check_room(size=0):
+    """Refuses when `size` more bytes would leave less than the reserve free on the data disk."""
+    if db.room() < size:
+        raise HTTPException(507, NO_ROOM)
+
+
 async def receive_upload(request, fh, fields=()):
-    """Streams a multipart upload: the file to `fh`, and the small `fields`. Returns {field: text}."""
+    """Streams a multipart upload: the file to `fh`, and the small `fields`. Returns {field: text}.
+    The free disk space is checked before, and every 16 MB while the file arrives."""
     ctype, params = parse_options_header(request.headers.get("content-type", ""))
     if ctype != b"multipart/form-data" or not params.get(b"boundary"):
         raise HTTPException(400, "Send the file as a form upload, in a field named file.")
+    length = request.headers.get("content-length", "")
+    check_room(int(length) if length.isdigit() else 0)
     upload = _Upload(fh, params[b"boundary"], fields)
+    received, checked = 0, 0
     try:
         async for chunk in request.stream():
             upload.parser.write(chunk)
+            received += len(chunk)
+            if received - checked >= 16 * 1024 * 1024:
+                checked = received
+                check_room()
         upload.parser.finalize()
     except ValueError as e:
         log.warning("Upload not read: %r", e)

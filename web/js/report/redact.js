@@ -13,6 +13,7 @@
 //  4. Names after a title (Dr, Mme…), after "validated by"…, before ", MD".
 //  5. Addresses, IDs, phone numbers, long digit runs.
 import { fold } from '../core/format.js';
+import { isBuiltInDocType } from '../core/schema.js';
 import { findDates, relDay } from './dates-text.js';
 
 // ---------- Text folding for name matching: no accents, no case, normal-width letters (core fold),
@@ -73,7 +74,7 @@ function nameParts(s) {
     .filter(w => w.length >= 2 && /^\p{L}[\p{L}']*$/u.test(w) && !GENERIC_PARTS.has(w));
 }
 
-// ---------- Document categories: only generic medical types are shown in AI mode.
+// ---------- Medical words (used to tell a heading from a name line)
 
 const GENERIC_CATEGORY = new Set(('blood test tests lab labs laboratory results result analysis analyses biology biologie '
   + 'bilan sanguin prise de sang cardiology cardiologie imaging imagerie radiology radiologie x-ray xray x ray radio mri irm '
@@ -88,10 +89,8 @@ const GENERIC_CATEGORY = new Set(('blood test tests lab labs laboratory results 
   + 'genetics genetique nutrition oncology oncologie hematology hematologie rheumatology rheumatologie nephrology '
   + 'nephrologie ent orl and et of').split(' '));
 
-export function safeCategory(c) {
-  const words = foldName(c).split(/[ /,&+]+/).filter(Boolean);
-  return words.length && words.every(w => GENERIC_CATEGORY.has(w)) ? String(c).trim() : 'Medical document';
-}
+/** AI mode shows only the app's built-in document types. Own types can contain names: "Medical document". */
+export const safeCategory = c => (isBuiltInDocType(String(c || '').trim()) ? String(c).trim() : 'Medical document');
 
 // ---------- Patterns
 

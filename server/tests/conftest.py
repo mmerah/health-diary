@@ -6,7 +6,6 @@ from pathlib import Path
 os.environ["DATA_DIR"] = tempfile.mkdtemp()
 os.environ["TZ"] = "Europe/Paris"
 os.environ["WEB_DIR"] = str(Path(__file__).resolve().parents[2] / "web")
-os.environ["COOKIE_SECURE"] = "false"
 os.environ.pop("DIARY_SECRET_KEY", None)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 

@@ -100,3 +100,31 @@ body.is-auth .view { min-height: calc(100vh - 140px); justify-content: center; }
 .about-list dd { margin: 0; font-weight: 700; text-align: right; overflow-wrap: anywhere; }
 .about-links { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .about-links a { display: flex; align-items: center; min-height: var(--touch); font-weight: 700; }
+
+/* My lists (profile-lists.js) */
+.list-section > summary .list-count { font-weight: 400; font-size: 0.875rem; margin-left: 4px; }
+.list-section + .list-section { border-top: 1px solid var(--line); }
+.list-edit > li { gap: 4px; }
+.list-edit > li.is-hidden .grow { color: var(--muted); }
+.list-btns { display: inline-flex; align-items: center; gap: 2px; flex-wrap: wrap; justify-content: flex-end; }
+.icon-up svg { transform: rotate(180deg); }
+.inline-add { display: flex; gap: 8px; align-items: center; }
+.inline-add input { flex: 1; }
+.inline-add .btn { flex: none; }
+.inline-add .btn svg, .list-section .btn svg { width: 16px; height: 16px; }
+.list-section .chip:disabled { opacity: 0.6; cursor: default; }
+.cat-group { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.cat-group legend { padding: 0; margin-bottom: 4px; }
+@media (max-width: 420px) {
+  .list-edit > li:has(.list-btns) { flex-wrap: wrap; }
+  .list-btns { width: 100%; }
+}
+
+/* Paperless tags (profile-settings.js) */
+.pl-tags { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.pl-tags legend { padding: 0; margin-bottom: 6px; font-size: 1rem; }
+#pl-tags { display: flex; flex-direction: column; gap: 10px; }
+.pl-tag-list > li { padding: 0; min-height: 0; }
+.pl-tag-list label { width: 100%; }
+.pl-count { font-size: 0.875rem; white-space: nowrap; }
+.pl-missing .rows > li { border: 0; min-height: 0; padding: 2px 0; flex-wrap: wrap; }

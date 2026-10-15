@@ -6,10 +6,10 @@
 //   { from, to, audience: 'doctor' | 'ai', question, include: { profile: true, … }, fullDaily, docScope, docFull, excludedDocs });
 import { addDays, ageOn, diffDays } from '../core/dates.js';
 import { lines as textLines } from '../core/format.js';
-import { bmi, hasContent, MEALS, normalizeLog, normalizeProfile } from '../core/schema.js';
+import { bmi, hasContent, MEALS, measurementTypes, normalizeLog, normalizeProfile } from '../core/schema.js';
 import { labTable, nonLabText, parseLabs } from './labs.js';
 import {
-  adherence, asNeededUse, associations, drinkStats, measurementStats, medsTouched as medsTouchedLog, medTimeline, monthlyStats, symptomStats,
+  adherence, asNeededUse, associations, counterList, drinkStats, measurementStats, medsTouched as medsTouchedLog, medTimeline, monthlyStats, symptomStats,
   wearableStats,
 } from './stats.js';
 
@@ -152,11 +152,15 @@ export function buildReportModel(data, options) {
   // Symptoms, drinks, wearable, associations
   model.symptoms = symptomStats(days, { from, to });
   model.drinks = drinkStats(days, { skip: partial });
+  model.counters = counterList(days);
   model.wearable = wearableStats(days, { from, to, skip: partial });
   model.associations = associations(days, model.symptoms, { skip: partial });
 
   // Measurements
-  model.measurements = Object.fromEntries(['weight', 'bp', 'temp'].map(t => [t, measurementStats(t, measurements, { from, to })]));
+  // Built-in types first, then the user's own types in catalog order, then types found only in the data.
+  const types = [...new Set([...Object.keys(measurementTypes({ all: true })), ...measurements.map(m => m.type)])];
+  model.measurements = Object.fromEntries(types.map(t => [t, measurementStats(t, measurements, { from, to })])
+    .filter(([t, x]) => ['weight', 'bp', 'temp'].includes(t) || x.rows.length || x.before));
 
   // Documents and labs
   model.documents = { available: data.documents != null, error: data.documentsError || null, list: [], total: (data.documents || []).length };
@@ -235,7 +239,7 @@ export function computeFlags(m) {
   const f = [];
   const inc = m.include || {};
   const { bp, temp, weight } = m.measurements;
-  if (inc.measurements !== false) addMeasurementFlags(f, bp, temp, weight);
+  if (inc.measurements !== false) { addMeasurementFlags(f, bp, temp, weight); addCustomFlags(f, m.measurements); }
   if (inc.symptoms !== false) {
     for (const s of m.symptoms) {
       if (s.trend === 'new' || s.trend === 'more' || s.trend === 'worse') f.push({ kind: `symptom-${s.trend}`, level: 'caution', symptom: s });
@@ -264,6 +268,10 @@ export function computeFlags(m) {
       .filter(a => !seen.has(a.symptom) && seen.add(a.symptom)).slice(0, 2);
     for (const a of strong) f.push({ kind: 'association', level: 'info', assoc: a });
   }
+  const w = inc.wearable !== false && m.wearable;
+  if (w && w.lowOxygenDays.length) f.push({ kind: 'oxygen-low-nights', level: 'caution', days: w.lowOxygenDays });
+  if (w && w.spo2Mean != null && w.spo2Mean < 94) f.push({ kind: 'oxygen-low-mean', level: 'caution', value: w.spo2Mean });
+  if (w && w.respiratoryMean != null && w.respiratoryMean > 20) f.push({ kind: 'respiratory-high', level: 'caution', value: w.respiratoryMean });
   const c = inc.wearable !== false && m.wearable && m.wearable.compare;
   if (c && c.first.restingHr && c.last.restingHr && c.last.restingHr.median - c.first.restingHr.median >= 5) {
     f.push({ kind: 'hr-up', level: 'caution', first: c.first.restingHr.median, last: c.last.restingHr.median });
@@ -283,5 +291,15 @@ function addMeasurementFlags(f, bp, temp, weight) {
   if (bp.low.length) f.push({ kind: 'bp-low', level: 'caution', count: bp.low.length, total: bp.rows.length, worst: bp.low[0] });
   if (temp.episodes && temp.episodes.length) f.push({ kind: 'fever', level: 'caution', episodes: temp.episodes });
   if (weight.change && Math.abs(weight.change.pct) >= 3) f.push({ kind: 'weight', level: 'caution', change: weight.change });
+}
+
+/** Own measurements: readings outside the user's own range. */
+function addCustomFlags(f, measurements) {
+  for (const x of Object.values(measurements)) {
+    if (!x.custom || !(x.above || x.below) || !(x.above.length || x.below.length)) continue;
+    const out = [...x.above, ...x.below];
+    const worst = x.above.length ? x.above.reduce((a, b) => (b.value > a.value ? b : a)) : x.below.reduce((a, b) => (b.value < a.value ? b : a));
+    f.push({ kind: 'custom-range', level: 'caution', label: x.label, above: x.above.length, below: x.below.length, total: x.rows.length, worst, count: out.length });
+  }
 }
 const latestDate = row => Object.keys(row.cells).sort().pop();

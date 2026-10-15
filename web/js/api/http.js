@@ -44,7 +44,10 @@ export class HttpApi {
   createIngestToken() { return this.req('/me/ingest-token', { method: 'POST' }); }
   revokeIngestToken() { return this.req('/me/ingest-token', { method: 'DELETE' }); }
   getPaperless() { return this.req('/me/paperless'); }
+  /** cfg: { token?, tags?: [names] }. Documents with any of the tags are used. */
   savePaperless(cfg) { return this.req('/me/paperless', { method: 'PUT', body: cfg }); }
+  /** [{ name, documentCount }]: all tags in the user's Paperless, to choose from. */
+  listPaperlessTags() { return this.req('/me/paperless/tags'); }
   dismissNotice() { return this.req('/me/notice/dismiss', { method: 'POST' }); }
   deleteMe(password) { return this.req('/me', { method: 'DELETE', body: { password } }); }
   async exportData() {
@@ -107,6 +110,9 @@ export class HttpApi {
   retryDocument(id) { return this.req(`/documents/${encodeURIComponent(id)}/retry`, { method: 'POST' }); }
   /** Address of the original file (PDF or image), to open in a new tab. */
   documentFileUrl(id) { return `${this.base}/documents/${encodeURIComponent(id)}/file`; }
+  /** The user's own symptoms, document types, measurements and counters (see core/schema.js). */
+  getCatalog() { return this.req('/catalog'); }
+  saveCatalog(c) { return this.req('/catalog', { method: 'PUT', body: c }); }
   getSettings() { return this.req('/settings'); }
   saveSettings(s) { return this.req('/settings', { method: 'PUT', body: s }); }
   importAppleHealth(file) {

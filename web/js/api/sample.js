@@ -70,6 +70,10 @@ export function seed() {
         steps: Math.round(between(2800, 14500)),
         restingHr: Math.round(between(54, 66)),
         hrv: Math.round(between(30, 62)),
+        // Apple Watch: blood oxygen (daily average and lowest, %) and respiratory rate (breaths per minute).
+        spo2: Math.round(between(95.5, 98.5) * 10) / 10,
+        spo2Min: Math.round(between(90, 95)),
+        respiratoryRate: Math.round(between(12.5, 16) * 10) / 10,
         workouts: r() < 0.35 ? [pick(WORKOUTS)] : [],
         source: 'apple',
         syncedAt: `${addDays(date, 1)}T08:${pad(Math.floor(between(0, 59)))}`,
@@ -117,7 +121,8 @@ export function seed() {
         dinner: { time: t5(19 * 60 + 15, 21 * 60), text: pick(DINNERS) },
       },
       snacks,
-      drinks: { water: Math.round(between(3, 9)), coffee, alcohol: weekend && r() < 0.6 ? Math.round(between(1, 3)) : 0 },
+      drinks: { water: Math.round(between(3, 9)), coffee, alcohol: weekend && r() < 0.6 ? Math.round(between(1, 3)) : 0,
+        c_tea: Math.round(between(0, 2.4)) },
       meds: { taken, extra: headache && r() < 0.6 ? [{ name: 'Paracetamol 1 g', time: t5(15 * 60, 18 * 60) }] : [] },
       activities: pick(ACTIVITIES), symptoms, notes,
     };
@@ -134,6 +139,10 @@ export function seed() {
   });
   [[-41, '21:10', 38.3], [-40, '08:00', 37.6], [-40, '20:30', 37.9], [-39, '08:15', 37.0]].forEach(([d, time, value]) => {
     measurements.push({ id: id++, type: 'temp', date: addDays(today, d), time, value, source: 'manual' });
+  });
+  // An own measurement from the catalog below: back pain on a 0–10 scale.
+  [[-30, 3], [-24, 5], [-17, 4], [-12, 6], [-6, 3], [-2, 2]].forEach(([d, value]) => {
+    measurements.push({ id: id++, type: 'c_pain', date: addDays(today, d), time: '20:00', value, source: 'manual' });
   });
 
   const documents = [
@@ -156,5 +165,13 @@ export function seed() {
   ];
 
   const settings = { lastSync: health[addDays(today, -2)].syncedAt, redactWords: ['BioCentre', 'Clinique Saint-Roch'], excludedDocs: [] };
-  return { profile, days, health, measurements, documents, settings, nextId: id, seededOn: today };
+  // The user's own items: a Tea counter and a Pain measurement (see core/schema.js, catalog).
+  const catalog = {
+    v: 1,
+    symptoms: ['Fatigue', 'Headache', 'Palpitations', 'Dizziness', 'Short of breath', 'Chest tightness', 'Bloating', 'Back pain'],
+    docTypes: { custom: [], hidden: [] },
+    measurements: [{ id: 'c_pain', name: 'Back pain', unit: '/10', low: null, high: 4, min: 0, max: 10, step: 1, hidden: false }],
+    counters: [{ id: 'c_tea', name: 'Tea', one: 'cup', many: 'cups', hidden: false }],
+  };
+  return { profile, days, health, measurements, documents, settings, catalog, nextId: id, seededOn: today };
 }

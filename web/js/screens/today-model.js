@@ -3,7 +3,10 @@
 // hand corrections of health data, and measurement form checks. Tested in tests/today.test.js.
 import { addDays, hmToMin, isValidDate, parse } from '../core/dates.js';
 import { duration, fold, num } from '../core/format.js';
-import { DRINKS, MEALS, MEASUREMENTS, SYMPTOMS, describeWhen, drinkSummary, mealAt, normalizeLog, parseMeasurement, severityLabel } from '../core/schema.js';
+import {
+  MEALS, SYMPTOMS, counterTypes, describeWhen, drinkSummary, mealAt, measurementDef, measurementTypes, normalizeLog, parseMeasurement,
+  severityLabel,
+} from '../core/schema.js';
 
 /** First words of a text, on one line, with "…" when cut. */
 export function clip(text, max = 44) {
@@ -80,8 +83,9 @@ export function symptomDetail(s) {
 export function measurementsSummary(list) {
   const latest = {};
   for (const m of [...(list || [])].sort((a, b) => (a.time || '').localeCompare(b.time || ''))) latest[m.type] = m;
-  return Object.keys(MEASUREMENTS).filter(t => latest[t])
-    .map(t => `${MEASUREMENTS[t].label} ${MEASUREMENTS[t].format(latest[t].value)}`).join(' · ');
+  // Built-in types first, then the user's own (also hidden ones: old values still show).
+  return Object.entries(measurementTypes({ all: true })).filter(([t]) => latest[t])
+    .map(([t, def]) => `${def.label} ${def.format(latest[t].value)}`).join(' · ');
 }
 
 /** Items of the slim health row. Empty array: no data. */
@@ -139,7 +143,7 @@ export function symptomOrder(days, defaults = SYMPTOMS) {
   let i = 0;
   for (const d of days || []) {
     for (const s of (d && d.log && d.log.symptoms) || []) {
-      const name = typeof s === 'string' ? s : s && s.name;
+      const name = s && s.name;
       if (!name) continue;
       const key = fold(name.trim());
       if (!count.has(key)) first.set(key, { name: name.trim(), i: i++ });
@@ -150,6 +154,16 @@ export function symptomOrder(days, defaults = SYMPTOMS) {
     .map(k => first.get(k).name);
   const seen = new Set(mine.map(fold));
   return [...mine, ...defaults.filter(n => !seen.has(fold(n)))];
+}
+
+/**
+ * The symptom chips: the user's own list in their order, then up to `extra` names they used in the
+ * last days (most used first) that are not in the list. days: [{ log }] from api.listDays.
+ */
+export function symptomChipList(own, days, extra = 3) {
+  const inList = new Set((own || []).map(fold));
+  const recent = symptomOrder(days, []).filter(n => !inList.has(fold(n))).slice(0, extra);
+  return [...(own || []), ...recent];
 }
 
 /** A new symptom: no severity yet. On today, "when" is the current part of the day. */
@@ -212,7 +226,7 @@ const intOrNull = v => (v === '' || v == null || Number.isNaN(Number(v)) ? null 
 
 /**
  * Applies the "Correct by hand" form to the day's health object.
- * values: { sleepH, sleepM, bed, wake, steps, restingHr, hrv } as typed (strings).
+ * values: { sleepH, sleepM, bed, wake, steps, restingHr, hrv, spo2?, spo2Min?, respiratoryRate? } as typed (strings).
  * Returns { next } (with `edited` updated) or { error }.
  */
 export function correctHealth(old, values) {
@@ -225,6 +239,11 @@ export function correctHealth(old, values) {
   if (steps != null && (steps < 0 || steps > 200000)) return { error: 'Steps: enter a number from 0 to 200,000.' };
   if (restingHr != null && (restingHr < 20 || restingHr > 250)) return { error: 'Resting heart rate: enter a value from 20 to 250.' };
   if (hrv != null && (hrv < 1 || hrv > 400)) return { error: 'HRV: enter a value from 1 to 400.' };
+  const dec = v => (v === '' || v == null || Number.isNaN(Number(String(v).replace(',', '.'))) ? null : Math.round(Number(String(v).replace(',', '.')) * 10) / 10);
+  const spo2 = dec(values.spo2), spo2Min = intOrNull(values.spo2Min), respiratoryRate = dec(values.respiratoryRate);
+  if (spo2 != null && (spo2 < 50 || spo2 > 100)) return { error: 'Oxygen: enter a value from 50 to 100 %.' };
+  if (spo2Min != null && (spo2Min < 50 || spo2Min > 100)) return { error: 'Lowest oxygen: enter a value from 50 to 100 %.' };
+  if (respiratoryRate != null && (respiratoryRate < 4 || respiratoryRate > 60)) return { error: 'Respiratory rate: enter a value from 4 to 60 per minute.' };
   const bed = values.bed || null, wake = values.wake || null;
 
   const sleepChanged = total !== (os.total ?? null) || bed !== (os.bed ?? null) || wake !== (os.wake ?? null);
@@ -242,6 +261,12 @@ export function correctHealth(old, values) {
   if (steps !== (prev.steps ?? null)) edited.add('steps');
   if (restingHr !== (prev.restingHr ?? null)) edited.add('restingHr');
   if (hrv !== (prev.hrv ?? null)) edited.add('hrv');
+  // The newer fields are only part of the form when the form sends them.
+  for (const [k, v] of [['spo2', spo2], ['spo2Min', spo2Min], ['respiratoryRate', respiratoryRate]]) {
+    if (!(k in values)) continue;
+    next[k] = v;
+    if (v !== (prev[k] ?? null)) edited.add(k);
+  }
   next.edited = [...edited];
   return { next };
 }
@@ -253,7 +278,7 @@ export function correctHealth(old, values) {
  * (null when the error is about the values together, like systolic below diastolic).
  */
 export function checkMeasurement(type, raw) {
-  const def = MEASUREMENTS[type];
+  const def = measurementDef(type);
   const res = parseMeasurement(type, { ...raw });
   if (!res.error) return { value: res.value };
   const bad = def.fields.find(f => {
@@ -278,6 +303,9 @@ function setAt(o, path, v) {
   if (v === undefined) delete parent[last]; else parent[last] = structuredClone(v);
 }
 
+/** Counter keys: built-in, the user's own, and any other key found in the logs. */
+const drinkKeys = logs => [...new Set([...counterTypes({ all: true }).map(d => d.key), ...logs.flatMap(l => Object.keys(l.drinks || {}))])];
+
 /** The parts of a log that merge on their own, with a name for messages. */
 export function logSections(...logs) {
   const ids = new Set();
@@ -285,7 +313,7 @@ export function logSections(...logs) {
   return [
     ...MEALS.map(m => ({ path: ['meals', m.key], name: m.label })),
     { path: ['snacks'], name: 'Snacks' },
-    ...DRINKS.map(d => ({ path: ['drinks', d.key], name: d.label })),
+    ...drinkKeys(logs).map(k => ({ path: ['drinks', k], name: (counterTypes({ all: true }).find(d => d.key === k) || { label: 'Counter' }).label })),
     ...[...ids].sort().map(id => ({ path: ['meds', 'taken', id], name: 'Medication' })),
     { path: ['meds', 'extra'], name: 'Other medication' },
     { path: ['activities'], name: 'What I did' },
@@ -340,4 +368,15 @@ export async function saveMerging(save, date, local, base) {
       conflict = e.data;
     }
   }
+}
+
+/** "Oxygen 97.1 % (lowest 92 %)" and "Respiratory rate 14.2 /min", when Apple Health sent them. */
+export function healthExtras(h) {
+  if (!h) return [];
+  const one = v => (Number.isInteger(Number(v)) ? String(v) : Number(v).toFixed(1));
+  const out = [];
+  if (h.spo2 != null) out.push({ key: 'spo2', label: 'Oxygen', text: `${one(h.spo2)} %${h.spo2Min != null ? ` (lowest ${one(h.spo2Min)} %)` : ''}` });
+  else if (h.spo2Min != null) out.push({ key: 'spo2', label: 'Oxygen', text: `lowest ${one(h.spo2Min)} %` });
+  if (h.respiratoryRate != null) out.push({ key: 'respiratoryRate', label: 'Respiratory rate', text: `${one(h.respiratoryRate)} /min` });
+  return out;
 }

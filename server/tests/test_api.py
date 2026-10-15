@@ -1,8 +1,8 @@
 import io
 import json
-import sqlite3
 import zipfile
 
+import pytest
 from conftest import PW, login, new_client
 
 from app import auth, db, main
@@ -72,12 +72,6 @@ def test_profile(c):
         assert "Traceback" not in r.text
 
 
-def test_old_profile_is_returned_as_is(c):
-    uid = c.get("/api/auth/status").json()["user"]["id"]
-    db.set_kv(uid, "profile", {"medications": "Aspirin\nVitamin D"})
-    assert c.get("/api/profile").json() == {"medications": "Aspirin\nVitamin D"}
-
-
 def test_settings(c):
     c.put("/api/settings", json={"redactWords": ["Clinic"]})
     c.put("/api/settings", json={"excludedDocs": [3], "lastSync": "2000-01-01T00:00"})
@@ -145,7 +139,7 @@ def test_day_log_validation(c):
         {"meals": {"breakfast": {"time": "7:30", "text": "x"}}},
         {"meals": {"lunch": {"time": "24:00", "text": "x"}}},
         {"snacks": [{"time": "", "text": "x"}] * 21},
-        {"drinks": {"water": 51}},
+        {"drinks": {"water": 1000}},
         {"drinks": {"coffee": -1}},
         {"symptoms": [{"name": "x", "severity": 4}]},
         {"symptoms": [{"name": "x", "periods": ["noon"]}]},
@@ -270,7 +264,7 @@ def test_export_and_delete_my_account(c):
     e.put("/api/profile", json={"name": "Erin"})
     e.put("/api/days/2026-10-01/log", json={"notes": "mine"})
     e.post("/api/measurements", json={"type": "weight", "date": "2026-10-01", "value": 60})
-    e.put("/api/me/paperless", json={"token": "erin-secret-token", "tag": "health"})
+    e.put("/api/me/paperless", json={"token": "erin-secret-token", "tags": ["health"]})
     e.post("/api/me/ingest-token")
 
     r = e.get("/api/me/export")
@@ -280,7 +274,7 @@ def test_export_and_delete_my_account(c):
     data = json.loads(raw)
     assert data["version"] == 2 and data["user"]["username"] == "erin" and data["documents"] == []
     assert data["profile"] == {"name": "Erin"} and data["days"][0]["log"] == {"notes": "mine"}
-    assert data["measurements"][0]["value"] == 60 and data["paperless"]["tag"] == "health"
+    assert data["measurements"][0]["value"] == 60 and data["paperless"]["tags"] == ["health"]
     assert set(data["settings"]) == {"lastSync", "redactWords", "excludedDocs"}
     assert b"erin-secret-token" not in raw and b"hash" not in raw
 
@@ -321,7 +315,7 @@ def test_passwords_are_hashed(c):
 
 def test_migrations_set_the_version(c):
     with db.connect() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 5
+        assert con.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 1
         assert con.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert con.execute("PRAGMA secure_delete").fetchone()[0] == 1
 
@@ -347,48 +341,96 @@ def test_transaction_rolls_back(c):
     assert db.get_day(uid, "2030-01-01")["log"] is None
 
 
-def test_version_1_database_moves_to_the_first_account(tmp_path, monkeypatch):
-    """A database from before accounts existed: the first account gets its data."""
-    monkeypatch.setattr(db, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(db, "DB_PATH", tmp_path / "diary.db")
-    monkeypatch.setattr(db, "TMP_DIR", tmp_path / "tmp")
-    old = sqlite3.connect(tmp_path / "diary.db")
-    old.executescript("""
-      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-      CREATE TABLE days (date TEXT PRIMARY KEY, log TEXT, health TEXT, updated_at TEXT NOT NULL DEFAULT (datetime('now')));
-      CREATE TABLE measurements (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, date TEXT NOT NULL, time TEXT,
-        value TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'manual', external_id TEXT UNIQUE,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')));
-      INSERT INTO kv VALUES ('profile', '{"name": "Old"}');
-      INSERT INTO days (date, log) VALUES ('2025-01-01', '{"notes": "old entry"}');
-      INSERT INTO measurements (type, date, value) VALUES ('weight', '2025-01-01', '80');
-    """)
-    old.commit()
-    old.close()
-    db.init()
-    uid = db.create_user("first", auth.hash_password(PW), is_admin=True, only_if_empty=True)["id"]
-    assert db.get_kv(uid, "profile", {}) == {"name": "Old"}
-    assert db.get_day(uid, "2025-01-01")["log"] == {"notes": "old entry"}
-    assert db.list_measurements(uid)[0]["value"] == 80
-    second = db.create_user("second", auth.hash_password(PW))["id"]
-    assert db.list_days(second) == []
-    assert json.loads(json.dumps(db.get_user(uid)))["ingestLastUsed"] is None
+# ---------- The user's own catalog
+
+CATALOG = {
+    "v": 1,
+    "symptoms": [" Headache ", "Headache", "Brain fog", ""],
+    "docTypes": {"custom": ["Dentist", "Blood test", "Dentist", " Eye exam "], "hidden": ["Imaging"]},
+    "measurements": [
+        {"id": "c_glucose", "name": "Blood glucose", "unit": "mmol/L", "low": 3.9, "high": 7.8, "min": 0.5,
+         "max": 40, "step": 0.1, "hidden": False},
+        {"id": "c_pain", "name": "Pain", "unit": "/10", "low": None, "high": 4, "min": 10, "max": 0, "step": None,
+         "hidden": True},
+        {"id": "c_glucose", "name": "Duplicate", "unit": "", "step": 1},
+    ],
+    "counters": [{"id": "c_tea", "name": "Tea", "one": "cup", "many": "", "hidden": False}],
+}
 
 
-def test_version_3_database_gets_versions(tmp_path, monkeypatch):
-    """Logs and profiles saved before versions existed start at version 1."""
+def test_catalog_is_normalized_like_the_app(c):
+    assert c.get("/api/catalog").json() is None
+    r = c.put("/api/catalog", json=CATALOG)
+    assert r.status_code == 200
+    cat = r.json()
+    assert cat["symptoms"] == ["Headache", "Brain fog"]
+    assert cat["docTypes"] == {"custom": ["Dentist", "Eye exam"], "hidden": ["Imaging"]}
+    assert [m["id"] for m in cat["measurements"]] == ["c_glucose", "c_pain"]
+    assert cat["measurements"][1] | {} == {"id": "c_pain", "name": "Pain", "unit": "/10", "low": None, "high": 4,
+                                           "min": 0, "max": 10, "step": 0.1, "hidden": True}
+    assert cat["counters"] == [{"id": "c_tea", "name": "Tea", "one": "cup", "many": "times", "hidden": False}]
+    assert c.get("/api/catalog").json() == cat
+
+
+@pytest.mark.parametrize("bad", [
+    {"measurements": [{"id": "glucose", "name": "x"}]},
+    {"measurements": [{"id": "c_x1", "name": ""}]},
+    {"measurements": [{"id": "c_x1", "name": "x", "step": 0}]},
+    {"measurements": [{"id": "c_x1", "name": "x", "unit": "u" * 21}]},
+    {"counters": [{"id": "c_" + "a" * 25, "name": "x"}]},
+    {"counters": [{"id": "c_ab", "name": "x" * 41}]},
+    {"docTypes": {"hidden": ["Other"]}},
+    {"docTypes": {"custom": ["x" * 61]}},
+    {"symptoms": ["s"] * 61},
+    {"measurements": [{"id": f"c_m{i:02d}", "name": "x"} for i in range(61)]},
+    {"colors": []},
+])
+def test_catalog_validation(c, bad):
+    assert c.put("/api/catalog", json=bad).status_code == 400
+
+
+def test_own_measurements(c):
+    c.put("/api/catalog", json=CATALOG)
+    m = c.post("/api/measurements", json={"type": "c_glucose", "date": "2026-10-02", "time": "08:00", "value": 5.4})
+    assert m.status_code == 201 and m.json()["value"] == 5.4 and m.json()["type"] == "c_glucose"
+    # Hidden measurements still accept values (old values stay valid).
+    assert c.post("/api/measurements", json={"type": "c_pain", "date": "2026-10-02", "value": 3}).status_code == 201
+    r = c.post("/api/measurements", json={"type": "c_glucose", "date": "2026-10-02", "value": 41})
+    assert r.status_code == 400 and r.json()["detail"] == "Use a value from 0.5 to 40 for Blood glucose."
+    r = c.post("/api/measurements", json={"type": "c_unknown", "date": "2026-10-02", "value": 1})
+    assert r.status_code == 400 and "not in your list" in r.json()["detail"]
+    assert c.post("/api/measurements", json={"type": "c_glucose", "date": "2026-10-02", "value": "x"}).status_code == 400
+    assert [x["value"] for x in c.get("/api/measurements?type=c_glucose").json()] == [5.4]
+    # Another user does not have this measurement.
+    c.post("/api/users", json={"username": "gus", "password": PW})
+    gus = login("gus")
+    assert gus.post("/api/measurements", json={"type": "c_glucose", "date": "2026-10-02", "value": 5}).status_code == 400
+
+
+def test_own_counters_in_the_day_log(c):
+    log = {"drinks": {"water": 6, "coffee": None, "c_tea": 3, "c_deleted": 900}}
+    assert c.put("/api/days/2026-10-03/log", json=log).status_code == 200
+    assert c.get("/api/days/2026-10-03").json()["log"]["drinks"] == log["drinks"]
+    for bad in ({"drinks": {"beer": 1}}, {"drinks": {"c_tea": 1000}}, {"drinks": {"water": -1}},
+                {"drinks": {"C_TEA": 1}}):
+        assert c.put("/api/days/2026-10-03/log", json=bad).status_code == 400, bad
+
+
+def test_catalog_is_in_the_export(c):
+    c.put("/api/catalog", json=CATALOG)
+    data = json.loads(zipfile.ZipFile(io.BytesIO(c.get("/api/me/export").content)).read("data.json"))
+    assert data["catalog"]["counters"][0]["id"] == "c_tea"
+
+
+def test_migrations_run_once_in_order(tmp_path, monkeypatch):
     for name, value in (("DATA_DIR", tmp_path), ("DB_PATH", tmp_path / "diary.db"), ("TMP_DIR", tmp_path / "tmp")):
         monkeypatch.setattr(db, name, value)
-    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS[:2])
+    db.init()  # a new database: the base schema, version 1
+    runs = []
+    monkeypatch.setattr(db, "MIGRATIONS", [(2, lambda c: runs.append(2) or c.execute("ALTER TABLE users ADD COLUMN x TEXT")),
+                                            (3, lambda c: runs.append(3))])
     db.init()
-    uid = db.create_user("old", auth.hash_password(PW), True)["id"]
+    db.init()
+    assert runs == [2, 3]
     with db.connect() as con:
-        con.execute("INSERT INTO days (user_id, date, log) VALUES (?, '2025-01-01', '{}')", (uid,))
-        con.execute("INSERT INTO days (user_id, date, health) VALUES (?, '2025-01-02', '{}')", (uid,))
-        con.execute("""INSERT INTO kv (user_id, key, value) VALUES (?, 'profile', '{"name": "Old"}')""", (uid,))
-    monkeypatch.undo()
-    for name, value in (("DATA_DIR", tmp_path), ("DB_PATH", tmp_path / "diary.db"), ("TMP_DIR", tmp_path / "tmp")):
-        monkeypatch.setattr(db, name, value)
-    db.init()
-    assert [d["logVersion"] for d in db.list_days(uid)] == [1, 0]
-    assert db.get_kv_version(uid, "profile", {}) == ({"name": "Old"}, 1)
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 3

@@ -8,6 +8,7 @@
 import { api } from './api/index.js';
 import { flushAll, resumeAll } from './core/autosave.js';
 import { esc } from './core/format.js';
+import { setCatalog } from './core/schema.js';
 import { session } from './core/session.js';
 import { clearLocalData, closeSheet, ICON, setSaveState, store, toast } from './core/ui.js';
 import auth from './screens/auth.js';
@@ -36,6 +37,11 @@ const ctx = {
   quickAdd: preset => import('./screens/quickadd.js').then(m => m.openQuickAdd(ctx, preset)),
   logout,
   onLogin,
+  /** Saves the user's own symptoms, types, measurements and counters, and uses them at once. */
+  async saveCatalog(catalog) {
+    const saved = await api.saveCatalog(catalog);
+    setCatalog(saved || catalog);
+  },
 };
 
 // ---------- Navigation and addresses
@@ -191,9 +197,11 @@ function showAuth(mode, message) {
   auth.mounted(ctx);
 }
 
-function onLogin(user) {
+async function onLogin(user) {
   ctx.user = user;
   session.set(user);
+  // The user's own items. Without them the app still works with the built-in ones.
+  setCatalog(await api.getCatalog().catch(() => null));
   resumeAll(); // edits this user made earlier on this device and that were not saved yet
   document.body.classList.remove('is-auth');
   const r = routeOf(location.hash);

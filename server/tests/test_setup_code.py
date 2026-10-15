@@ -1,4 +1,3 @@
-import pytest
 from conftest import PW, new_client
 
 from app import auth, main
@@ -18,16 +17,8 @@ def test_many_addresses_cannot_block_the_setup(server):
     auth.reset_limits()
 
 
-@pytest.mark.parametrize("code", ["1234", "----------------------", "abc-def-ghi-jkl"])
-def test_weak_setup_code_stops_the_start(server, monkeypatch, caplog, code):
-    monkeypatch.setenv("SETUP_CODE", code)
-    with pytest.raises(RuntimeError), new_client():
-        pass
-    assert "SETUP_CODE is too weak" in caplog.text
-
-
-def test_strong_setup_code_is_used(server, monkeypatch):
+def test_setup_code_is_always_random(server, monkeypatch):
+    # There is no setting for it: a fixed code could be weak or reused.
     monkeypatch.setenv("SETUP_CODE", "my-own-setup-code-2026")
     with new_client():
-        assert main.SETUP_CODE == "my-own-setup-code-2026"
-    assert auth.strong_enough("ABCD EFGH JKLM NPQR") and not auth.strong_enough("")
+        assert main.SETUP_CODE != "my-own-setup-code-2026" and len(main.SETUP_CODE) == 34

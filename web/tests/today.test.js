@@ -1,7 +1,7 @@
 // Tests for the Today screen helpers (js/screens/today-model.js).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { normalizeLog } from '../js/core/schema.js';
+import { normalizeLog, setCatalog } from '../js/core/schema.js';
 import * as M from '../js/screens/today-model.js';
 
 test('clip: short text unchanged, long text cut at a word with an ellipsis', () => {
@@ -200,4 +200,49 @@ test('saveMerging: plain save, merge on 409, retry once, then give up', async ()
 
   await assert.rejects(M.saveMerging(async () => { throw conflict({}, 9); }, 'd', local, base), /Conflict/);
   await assert.rejects(M.saveMerging(async () => { throw Object.assign(new Error('Down'), { status: 500 }); }, 'd', local, base), /Down/);
+});
+
+// The user's own items (catalog): a Tea counter, a Back pain measurement, an own symptom list.
+const OWN = { symptoms: ['Back pain', 'Fatigue'], counters: [{ id: 'c_tea', name: 'Tea', one: 'cup', many: 'cups' }],
+  measurements: [{ id: 'c_pain', name: 'Back pain', unit: '/10', low: null, high: 4, min: 0, max: 10, step: 1 }] };
+
+test('own counters and measurements in the summaries', t => {
+  setCatalog(OWN);
+  t.after(() => setCatalog(null));
+  const log = normalizeLog({ drinks: { water: 2, coffee: null, alcohol: 0, c_tea: 3 } });
+  assert.equal(M.drinksSummary(log.drinks), '2 water · 0 alcohol · 3 tea');
+  assert.equal(M.measurementsSummary([{ type: 'c_pain', time: '20:00', value: 6 }, { type: 'weight', time: '07:00', value: 76.9 }]),
+    'Weight 76.9 kg · Back pain 6/10');
+  assert.equal(M.checkMeasurement('c_pain', { v: '11' }).field, 'v');
+  assert.deepEqual(M.checkMeasurement('c_pain', { v: '5' }), { value: 5 });
+});
+
+test('own counters merge like drinks', t => {
+  setCatalog(OWN);
+  t.after(() => setCatalog(null));
+  const base = normalizeLog({ drinks: { c_tea: 1 } });
+  const local = structuredClone(base); local.drinks.c_tea = 2;
+  const server = structuredClone(base); server.drinks.water = 4;
+  const { log, conflicts } = M.mergeLog(base, local, server);
+  assert.equal(log.drinks.c_tea, 2);
+  assert.equal(log.drinks.water, 4);
+  assert.deepEqual(conflicts, []);
+});
+
+test('symptom chips: own list in its order, then up to 3 recent names not in it', () => {
+  const days = [{ log: { symptoms: [{ name: 'Nausea' }, { name: 'fatigue' }, { name: 'Cough' }, { name: 'Itch' }, { name: 'Rash' }] } },
+    { log: { symptoms: [{ name: 'Nausea' }] } }];
+  assert.deepEqual(M.symptomChipList(['Back pain', 'Fatigue'], days), ['Back pain', 'Fatigue', 'Nausea', 'Cough', 'Itch']);
+  assert.deepEqual(M.symptomChipList([], []), []);
+});
+
+test('Apple Health oxygen and respiratory rate: text and hand correction', () => {
+  assert.deepEqual(M.healthExtras({ spo2: 97.1, spo2Min: 92, respiratoryRate: 14.2 }).map(x => x.text), ['97.1 % (lowest 92 %)', '14.2 /min']);
+  assert.deepEqual(M.healthExtras({ steps: 10 }), []);
+  const old = { spo2: 97.1, spo2Min: 92, respiratoryRate: 14.2, edited: [] };
+  const r = M.correctHealth(old, { spo2: '96,5', spo2Min: '92', respiratoryRate: '14.2' });
+  assert.equal(r.next.spo2, 96.5);
+  assert.deepEqual(r.next.edited, ['spo2']);
+  assert.ok(M.correctHealth(old, { spo2: '120' }).error);
+  assert.equal(M.correctHealth(old, { steps: '10' }).next.spo2, 97.1); // not in the form: kept
 });

@@ -4,6 +4,7 @@ import { fullLabel, minToHm, today as todayIso } from '../core/dates.js';
 import { esc } from '../core/format.js';
 import { describeWhen, drinkSummary } from '../core/schema.js';
 import { safeCategory } from './redact.js';
+import { measurementDefOf } from './stats.js';
 import { ADHERENCE_RULE, dayLines, DOC_SCOPE_TEXT, monthName, TABLE_TEXT, truncate, weeklyText, writers } from './markdown.js';
 import {
   drinkText, flagText, LEVEL_WORD, labValue, measurementText, medName,
@@ -65,7 +66,7 @@ export function toHtml(model, opts = {}) {
   if (inc.labs && model.labs.rows.length) out.push(labsHtml());
   if (inc.wearable && model.wearable) out.push(wearableHtml());
   if (inc.drinks && model.drinks.length) {
-    out.push(section('drinks', 'Drinks', list(model.drinks.map(d => `<strong>${esc(d.label)}</strong>: ${esc(drinkText(d))}.`)),
+    out.push(section('drinks', 'Drinks', list(model.drinks.map(d => `<strong>${esc(d.custom ? T(d.label) : d.label)}</strong>: ${esc(d.custom ? T(drinkText(d)) : drinkText(d))}.`)),
       'Days where a drink was not recorded are left out.'));
   }
   if (inc.associations && model.associations.length) out.push(associationsHtml());
@@ -129,13 +130,19 @@ export function toHtml(model, opts = {}) {
   }
 
   function measurementsHtml() {
-    const types = ['weight', 'bp', 'temp'].map(t => model.measurements[t]).filter(x => x.rows.length || x.before);
+    const types = Object.values(model.measurements).filter(x => x.rows.length || x.before);
     if (!types.length) return '';
-    const flagOf = { weight: () => null, bp: v => (v.sys >= 140 || v.dia >= 90 ? 'High' : v.sys < 90 || v.dia < 60 ? 'Low' : null), temp: v => (v >= 38 ? 'Fever' : null) };
+    // A short word for a flagged value: "High", "Low", "Fever", "Above your range".
+    const flagOf = type => v => {
+      if (type === 'bp') return v.sys >= 140 || v.dia >= 90 ? 'High' : v.sys < 90 || v.dia < 60 ? 'Low' : null;
+      if (type === 'temp') return v >= 38 ? 'Fever' : null;
+      const f = measurementDefOf(type).flag(v);
+      return f ? f.replace(/\s*\(.*\)$/, '') : null;
+    };
     // One line per type: the values in time order; flagged values stand out with a word.
     const items = types.map(x => {
       const val = r => {
-        const flag = flagOf[x.type](r.value);
+        const flag = flagOf(x.type)(r.value);
         return `<span class="rp-val${flag ? ' is-flag' : ''}"><span class="rp-nowrap">${esc(measurementText(r).replace(/ · pulse \d+/, ''))}</span> <span class="rp-muted rp-nowrap">${esc(D(r.date))}${r.time && x.type === 'temp' ? ` ${esc(r.time)}` : ''}</span>${flag ? ` <span class="pill high">${esc(flag)}</span>` : ''}</span>`;
       };
       const extra = [
@@ -143,7 +150,7 @@ export function toHtml(model, opts = {}) {
         x.change && `change ${x.change.kg > 0 ? '+' : ''}${one(x.change.kg)} kg (${x.change.pct > 0 ? '+' : ''}${one(x.change.pct)}%)`,
         x.before && `before the period: ${measurementText(x.before).replace(/ · pulse \d+/, '')} (${D(x.before.date)})`,
       ].filter(Boolean);
-      return `<li><strong>${esc(x.label)}</strong>: ${x.rows.length ? x.rows.map(val).join('<span class="rp-sep"> · </span>') : 'none in the period'}${extra.length ? `<span class="rp-muted rp-block">${esc(extra.join('; '))}</span>` : ''}</li>`;
+      return `<li><strong>${esc(x.custom ? T(x.label) : x.label)}</strong>: ${x.rows.length ? x.rows.map(val).join('<span class="rp-sep"> · </span>') : 'none in the period'}${extra.length ? `<span class="rp-muted rp-block">${esc(extra.join('; '))}</span>` : ''}</li>`;
     });
     return section('measurements', 'Measurements', `<ul class="rp-list rp-tight rp-meas">${items.join('')}</ul>`);
   }
@@ -163,14 +170,15 @@ export function toHtml(model, opts = {}) {
     const hm = v => (v == null ? '–' : minToHm(v));
     const r = (x, f) => (x ? `${f(x.min)}–${f(x.max)}` : '–');
     const rows = [['Sleep', 'sleep', sleepText], ['Bedtime', 'bed', hm], ['Steps', 'steps', v => stepsText(v, false)],
-      ['Resting heart rate (bpm)', 'restingHr', Math.round], ['HRV (ms)', 'hrv', Math.round]]
+      ['Resting heart rate (bpm)', 'restingHr', Math.round], ['HRV (ms)', 'hrv', Math.round],
+      ['Blood oxygen, daily average (%)', 'spo2', one], ['Blood oxygen, lowest (%)', 'spo2Min', Math.round], ['Respiratory rate (/min)', 'respiratoryRate', one]]
       .filter(([, k]) => o[k])
       .map(([label, k, f]) => [label, f(o[k].median), r(o[k], f), ...(c ? [c.first[k] ? f(c.first[k].median) : '–', c.last[k] ? f(c.last[k].median) : '–'] : [])]);
     const head = ['', 'Median', 'Range', ...(c ? ['First 4 weeks', 'Last 4 weeks'] : [])];
     const weeks = model.options.fullDaily ? `<h3>Weekly medians</h3>${table(['Week from', 'Sleep', 'Bedtime', 'Steps', 'Rest HR', 'HRV'], w.weeks.map(x => [D(x.start), sleepText(x.sleep), hm(x.bed),
       stepsText(x.steps, false), x.restingHr == null ? '–' : Math.round(x.restingHr), x.hrv == null ? '–' : Math.round(x.hrv)]),
     { numeric: [1, 2, 3, 4, 5], caption: 'Weekly medians', cls: 'rp-compact' })}` : '';
-    const notes = [`${plural(w.shortNights, 'night')} under 6 h`, w.workouts.length && `workouts: ${w.workouts.map(x => `${x.type} ${x.count}×`).join(', ')}`].filter(Boolean);
+    const notes = [`${plural(w.shortNights, 'night')} under 6 h`, o.spo2Min && `${plural(w.lowOxygenDays.length, 'day')} with blood oxygen under 90 %`, w.workouts.length && `Workouts: ${w.workouts.map(x => `${x.type} ${x.count}×`).join(', ')}`].filter(Boolean);
     return section('wearable', 'Sleep, steps and heart rate', `${table(head, rows, { numeric: [1, 2, 3, 4], caption: 'Wearable data', cls: 'rp-compact' })}
       <p class="rp-note">${esc(notes.join('. '))}.</p>${weeks}`,
     `Wearable data on ${plural(w.days, 'day')}. Sleep is the night before the date.`);
@@ -178,7 +186,8 @@ export function toHtml(model, opts = {}) {
 
   function associationsHtml() {
     // One row per symptom, one column per factor: "8 of 30 (27%) vs 6 of 37 (16%)".
-    const factors = [['coffee', 'Coffee: 3+ cups vs fewer'], ['alcohol', 'Alcohol: any vs none'], ['sleep', 'Sleep: under 6 h vs 6 h+']]
+    const own = [...new Map(model.associations.filter(a => a.custom).map(a => [a.factor, [a.factor, `${T(a.label)}: some vs none`]])).values()];
+    const factors = [['coffee', 'Coffee: 3+ cups vs fewer'], ['alcohol', 'Alcohol: any vs none'], ['sleep', 'Sleep: under 6 h vs 6 h+'], ...own]
       .filter(([k]) => model.associations.some(a => a.factor === k));
     const names = [...new Set(model.associations.map(a => a.symptom))];
     const cellOf = a => (a ? `${a.a.with}/${a.a.days} (${pct(a.rateA)}) vs ${a.b.with}/${a.b.days} (${pct(a.rateB)})` : '–');

@@ -31,8 +31,8 @@ export async function loadProfile(ctx) {
   if (!saver) saver = createAutosave(KEY, (_, entry) => saveVersioned(ctx.api, entry));
   if (saver.has(KEY)) {
     const entry = saver.get(KEY);
-    P = normalizeProfile(entry && entry.profile ? entry.profile : entry); // older queues hold a plain profile
-    base = entry && entry.base ? { version: entry.baseVersion, profile: entry.base } : null;
+    P = normalizeProfile(entry.profile);
+    base = entry.base ? { version: entry.baseVersion, profile: entry.base } : null;
     ours = new Set();
   } else {
     const raw = await ctx.api.getProfile();
@@ -52,9 +52,9 @@ const queue = () => saver.queue(KEY, { profile: P, baseVersion: base ? base.vers
  * merge field by field, save again once with the new version, and tell the user.
  */
 async function saveVersioned(api, entry) {
-  const sent = normalizeProfile(entry && entry.profile ? entry.profile : entry);
-  let baseVersion = entry && entry.profile ? entry.baseVersion : null;
-  let baseCopy = entry && entry.profile ? entry.base : null;
+  const sent = normalizeProfile(entry.profile);
+  let baseVersion = entry.baseVersion;
+  let baseCopy = entry.base;
   // Newer versions written by this device only: this entry is simply newer, build on the latest.
   if (base && baseVersion != null && ours.has(baseVersion)) { baseVersion = base.version; baseCopy = base.profile; }
   let toSave = sent, merged = false;

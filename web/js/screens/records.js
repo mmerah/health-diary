@@ -4,8 +4,9 @@
 // The list loads after the screen shows. Documents being read are polled until they are ready.
 import { fullLabel, isValidDate, today as todayIso } from '../core/dates.js';
 import { esc, num, plural } from '../core/format.js';
-import { DOC_CATEGORIES } from '../core/schema.js';
+import { docCategories } from '../core/schema.js';
 import { closeSheet, confirmTwice, ICON, openSheet, toast } from '../core/ui.js';
+import { tagsOf, tagsText } from './profile-paperless.js';
 import {
   categoriesOf, changedFields, excludedList, excludedSet, filterDocs, MAX_PAGES, MAX_UPLOAD_MB, NO_TYPE, sourcesOf, suggestionDiff,
   untypedCount, uploadError,
@@ -48,7 +49,7 @@ function emptyHtml(ctx) {
       <p>Keep your medical documents here: blood tests, letters, scans. You can add them to reports for your doctor.</p></div>
     <ul class="records-ways">
       ${can.upload ? `<li><strong>Add a document.</strong> Choose a PDF or take a photo. The diary reads the text for you.</li>` : ''}
-      ${plOn ? `<li><strong>Paperless is connected.</strong> Add the tag <span class="tag">${esc(pl.tag || 'medical')}</span> to your medical documents in Paperless. Then tap Refresh.</li>`
+      ${plOn ? `<li><strong>Paperless is connected.</strong> ${tagsOf(pl).length === 1 ? 'Add the tag' : 'Add one of the tags'} ${tagsOf(pl).map(t => `<span class="tag">${esc(t)}</span>`).join(', ')} to your medical documents in Paperless. Then tap Refresh.</li>`
     : can.paperless && pl && pl.available ? '<li><strong>Do you use Paperless?</strong> Connect it in Profile → Settings. Its medical documents then show here too.</li>' : ''}
     </ul>
     <div class="btn-row records-empty-actions">
@@ -183,6 +184,9 @@ function headActions(ctx) {
 /** Shows the list (or the empty state) from st. */
 function show(ctx) {
   headActions(ctx);
+  const pl = st.paperless;
+  const from = $('records-from');
+  if (from) from.textContent = pl && pl.available && pl.hasToken ? ` From Paperless: ${tagsText(tagsOf(pl).filter(t => !(pl.missingTags || []).includes(t)).concat(tagsOf(pl).every(t => (pl.missingTags || []).includes(t)) ? tagsOf(pl) : []))}.` : '';
   if (!st.docs.length && !st.paperlessError) { setBody(emptyHtml(ctx)); return; }
   setBody(listHtml(ctx));
   renderList();
@@ -249,7 +253,9 @@ function poll(ctx, id, n = 0, errors = 0) {
 // ---------- Sheets: add and edit
 
 function detailFields(d = {}) {
-  const cats = d.category && !DOC_CATEGORIES.includes(d.category) ? [...DOC_CATEGORIES, d.category] : DOC_CATEGORIES;
+  // The user's list (Profile → My lists). A saved type that is no longer in the list stays choosable here.
+  const list = docCategories();
+  const cats = d.category && !list.includes(d.category) ? [...list, d.category] : list;
   return `<div class="grid2">
       <div class="field"><label class="label" for="doc-f-date">Date</label>
         <input id="doc-f-date" name="date" type="date" max="${todayIso()}" value="${esc(d.date || '')}"></div>
@@ -376,7 +382,7 @@ export default {
     st = null;
     return `<div class="screen-head"><h1 class="screen-title">Records</h1>
         <div class="btn-row records-head-actions" id="records-actions"></div></div>
-      <p class="hint records-lead">Your medical documents. Choose which ones go into reports.</p>
+      <p class="hint records-lead">Your medical documents. Choose which ones go into reports.<span id="records-from"></span></p>
       <div id="records-body" class="records-body" aria-busy="true">${loadingHtml}</div>`;
   },
 

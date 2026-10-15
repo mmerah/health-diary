@@ -2,10 +2,10 @@
 // Every value goes through esc(). Behaviour lives in today.js.
 import { label, longLabel, relativeDay } from '../core/dates.js';
 import { duration, esc, fold, num, plural } from '../core/format.js';
-import { DRINKS, MEALS, MEASUREMENTS, PERIODS, SEVERITIES, bmi, medLabel } from '../core/schema.js';
+import { MEALS, PERIODS, SEVERITIES, bmi, counterTypes, measurementDef, measurementTypes, medLabel } from '../core/schema.js';
 import { ICON } from '../core/ui.js';
 import {
-  clip, drinksSummary, healthItems, healthSource, mealSummary, measurementsSummary, medsSummary,
+  clip, drinksSummary, healthExtras, healthItems, healthSource, mealSummary, measurementsSummary, medsSummary,
   sleepStages, snacksSummary, symptomDetail, symptomsSummary,
 } from './today-model.js';
 
@@ -128,7 +128,7 @@ export function sections(st) {
       ${row(st, 'snacks', { icon: ICON.snack, title: 'Snacks', summary: summaryOf(st, 'snacks'), body: snacksBody(st) })}
       ${row(st, 'dinner', mealRowOpts(st, 'dinner'))}
     </section>`,
-    drinks: single(st, 'drinks', { icon: ICON.drink, title: 'Drinks', body: drinksBody(st) }),
+    drinks: single(st, 'drinks', { icon: ICON.drink, title: drinksTitle(), body: drinksBody(st) }),
     meds: single(st, 'meds', { icon: ICON.pill, title: 'Medication', body: medsBody(st) }),
     activities: single(st, 'activities', { icon: ICON.activity, title: 'What I did', body: textBody(st, 'activities', 'What did you do?', 'Work, sport, rest, travel…') }),
     symptoms: single(st, 'symptoms', { icon: ICON.symptom, title: 'Symptoms', body: symptomsBody(st) }),
@@ -215,9 +215,10 @@ function healthBody(st) {
         ${naps.length ? `<dd class="h-sub">${esc(naps.join(' · '))}</dd>` : ''}
         ${s.inBedOnly ? '<dd class="h-sub">Only time in bed was recorded. Wear your watch at night to get sleep stages.</dd>' : ''}
       </div>
-      <div class="h-d"><dt>${ICON.steps}Steps ${mark('steps')}</dt><dd><span class="h-big">${esc(num(h.steps))}</span>${st.isToday && h.steps != null ? '<span class="h-sub">so far</span>' : ''}</dd></div>
+      <div class="h-d h-d-steps"><dt>${ICON.steps}Steps ${mark('steps')}</dt><dd><span class="h-big">${esc(num(h.steps))}</span>${st.isToday && h.steps != null ? '<span class="h-sub">so far</span>' : ''}</dd></div>
       <div class="h-d"><dt>${ICON.heart}Resting HR ${mark('restingHr')}</dt><dd><span class="h-big">${esc(num(h.restingHr))}</span><span class="h-sub">bpm</span></dd></div>
       <div class="h-d"><dt>${ICON.symptom}HRV ${mark('hrv')}</dt><dd><span class="h-big">${esc(num(h.hrv))}</span><span class="h-sub">ms</span></dd></div>
+      ${healthExtras(h).map(x => `<div class="h-d h-d-${esc(x.key)}"><dt>${x.key === 'spo2' ? ICON.heart : ICON.symptom}${esc(x.label)} ${mark(x.key)}</dt><dd><span class="h-mid">${esc(x.text)}</span></dd></div>`).join('')}
       ${h.workouts && h.workouts.length ? `<div class="h-d h-d-wide"><dt>${ICON.activity}Workouts</dt>${h.workouts.map(w => `<dd>${esc(w.type)} · ${esc(w.minutes)} min active${w.start ? ` · from ${esc(w.start)}` : ''}</dd>`).join('')}</div>` : ''}
     </dl>
     <p class="h-source">${esc(healthSource(h, st.today))}${edited.length ? ' · ✎ Corrected by hand. A new sync keeps your corrections.' : ''}</p>`;
@@ -240,6 +241,9 @@ function healthForm(st) {
       ${f('steps', 'Steps', v(h.steps), `${n} min="0" max="200000"`)}
       ${f('restingHr', 'Resting HR (bpm)', v(h.restingHr), `${n} min="20" max="250"`)}
       ${f('hrv', 'HRV (ms)', v(h.hrv), `${n} min="1" max="400"`)}
+      ${f('spo2', 'Oxygen, average (%)', v(h.spo2), 'type="text" inputmode="decimal"')}
+      ${f('spo2Min', 'Oxygen, lowest (%)', v(h.spo2Min), `${n} min="50" max="100"`)}
+      ${f('respiratoryRate', 'Respiratory rate (/min)', v(h.respiratoryRate), 'type="text" inputmode="decimal"')}
     </div>
     <p class="field-error" role="alert" data-error="health"></p>
     <p class="hint">A new sync does not change the values you correct here.</p>
@@ -270,8 +274,13 @@ function snacksBody(st) {
 
 const drinkCount = (d, v) => (v == null ? 'Not recorded' : v === 0 ? 'None' : plural(v, d.one, d.many));
 
+/** "Drinks", or "Drinks and counters" when the user has own counters (Tea, Cigarettes…). */
+export const drinksTitle = () => (counterTypes().some(d => d.custom) ? 'Drinks and counters' : 'Drinks');
+
 function drinksBody(st) {
-  return `<ul class="drink-list">${DRINKS.map(d => {
+  // Own counters that are hidden now still show when this day has a value.
+  const list = counterTypes({ all: true }).filter(d => !d.custom || counterTypes().some(x => x.key === d.key) || st.log.drinks[d.key] != null);
+  return `<ul class="drink-list">${list.map(d => {
     const v = st.log.drinks[d.key];
     return `<li class="drink" data-drink="${esc(d.key)}">
       <span class="drink-name">${esc(d.label)}<span class="drink-val${v == null ? ' is-empty' : ''}" id="dv-${esc(d.key)}" aria-live="polite">${esc(drinkCount(d, v))}</span></span>
@@ -348,7 +357,7 @@ export function radios({ name, i, options, value, labelId, cls = '' }) {
 export const SEV_OPTIONS = SEVERITIES.map(s => ({ value: String(s.value), label: s.label, cls: `sev-${s.value}`, dot: true }));
 const WHEN_OPTIONS = [{ value: 'day', label: 'All day' }, { value: 'periods', label: 'Part of day' }, { value: 'time', label: 'Time' }];
 
-export function symptomChips(st) {
+export function chipsHtml(st) {
   const logged = new Set(st.log.symptoms.map(s => fold(s.name)));
   const names = st.symptomNames;
   const shown = st.showAllSymptoms ? names : names.slice(0, CHIPS_SHOWN);
@@ -365,8 +374,9 @@ export function symptomChips(st) {
 
 function symptomsBody(st) {
   const list = st.log.symptoms.map((s, i) => symptomItem(st, s, i)).join('');
-  return `<p class="hint">Tap a symptom to add it.</p>
-    <div data-chips>${symptomChips(st)}</div>
+  return `<div class="label-row"><p class="hint">Tap a symptom to add it.</p>
+      <button type="button" class="btn ghost small edit-list" data-act="edit-symptoms">${ICON.settings}<span>Edit list</span></button></div>
+    <div data-chips>${chipsHtml(st)}</div>
     <form class="inline-add" data-form="add-symptom">
       <label class="sr-only" for="sym-new">Other symptom</label>
       <input id="sym-new" name="name" type="text" placeholder="Other symptom" autocomplete="off" maxlength="80">
@@ -403,14 +413,14 @@ export function symptomItem(st, s, i) {
 }
 
 function measurementsBody(st) {
-  const add = `<div class="btn-row">${Object.entries(MEASUREMENTS).map(([type, def]) => `<button type="button" class="btn small" data-act="add-measure" data-type="${esc(type)}">${ICON.plus}<span>${esc(def.label)}</span></button>`).join('')}</div>`;
+  const add = `<div class="btn-row">${Object.entries(measurementTypes()).map(([type, def]) => `<button type="button" class="btn small" data-act="add-measure" data-type="${esc(type)}">${ICON.plus}<span>${esc(def.label)}</span></button>`).join('')}</div>`;
   if (st.measures === 'loading') return `<p class="hint loading" role="status">Loading measurements…</p>${add}`;
   if (!Array.isArray(st.measures)) {
     return `<div class="notice is-error" role="alert">${ICON.alert}<div><p>Measurements did not load.</p>
       <button type="button" class="btn small" data-act="reload-measures">Try again</button></div></div>${add}`;
   }
   const list = st.measures.map(m => {
-    const def = MEASUREMENTS[m.type];
+    const def = measurementDef(m.type);
     if (!def) return '';
     const flag = def.flag(m.value);
     const b = m.type === 'weight' ? bmi(m.value, st.heightCm) : null;

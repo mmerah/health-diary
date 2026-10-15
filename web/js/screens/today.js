@@ -4,14 +4,14 @@ import { api } from '../api/index.js';
 import { createAutosave } from '../core/autosave.js';
 import { addDays, nowHm, today as todayIso } from '../core/dates.js';
 import { fold, listJoin } from '../core/format.js';
-import { activeMeds, asNeededMeds, hasContent, medLabel, normalizeLog, normalizeProfile, periodOf, SYMPTOMS } from '../core/schema.js';
+import { activeMeds, asNeededMeds, hasContent, medLabel, normalizeLog, normalizeProfile, periodOf, symptomChips } from '../core/schema.js';
 import { session } from '../core/session.js';
 import { store, toast } from '../core/ui.js';
 import {
   changedSections, clampDate, correctHealth, defaultOpen, mergeLog, newSymptom, saveMerging, stepDrink,
-  symptomOrder, weekDays,
+  symptomChipList, weekDays,
 } from './today-model.js';
-import { bodyOf, emptyOf, healthSection, page, symptomChips, summaryOf, symptomItem, weekStrip } from './today-view.js';
+import { bodyOf, chipsHtml, emptyOf, healthSection, page, summaryOf, symptomItem, weekStrip } from './today-view.js';
 
 const WIDE = '(min-width: 1000px)';
 
@@ -67,19 +67,19 @@ let openMemory = { date: null, wide: null, keys: new Set() }; // open sections, 
 let flashHealthNext = false; // after a sync, highlight the health row once
 let mq = null;              // the wide-screen media query, to switch layouts
 
-// ---------- Symptom chip order: the user's own symptoms of the last 60 days first. Cached per session.
+// ---------- Symptom chips: the user's own list (Profile → Settings), then up to 3 names used in the
+// last 60 days that are not in it. Only the days are cached, so a list edit shows at once.
 
-let symptomCache = null;
-export function loadSymptomOrder(a = api) {
-  if (!symptomCache) {
+let recentCache = null;
+export async function loadSymptomOrder(a = api) {
+  if (!recentCache) {
     const to = todayIso();
-    symptomCache = a.listDays(addDays(to, -60), to).then(days => symptomOrder(days, SYMPTOMS))
-      .catch(e => { symptomCache = null; console.error(e); return SYMPTOMS.slice(); });
+    recentCache = a.listDays(addDays(to, -60), to).catch(e => { recentCache = null; console.error(e); return []; });
   }
-  return symptomCache;
+  return symptomChipList(symptomChips(), await recentCache);
 }
 /** Quick add calls this after it logs a symptom, so the order learns it. */
-export function forgetSymptomOrder() { symptomCache = null; }
+export function forgetSymptomOrder() { recentCache = null; }
 
 /** Saves a log of another day than the one on display (Undo after a day change, quick add). */
 export async function saveOtherDay(date, change) {
@@ -129,7 +129,7 @@ async function render(ctx, params = {}) {
     asNeeded: profile ? asNeededMeds(profile, date) : [],
     canSync: !!(api.can && api.can.sync),
     measures: 'loading',
-    symptomNames: SYMPTOMS.slice(),
+    symptomNames: symptomChips().slice(),
     showAllSymptoms: false,
     healthForm: false,
     editTime: null,
@@ -214,7 +214,7 @@ function redrawChips() {
   const box = isLive(st) && st.root.querySelector('[data-chips]');
   if (!box) return;
   const active = box.contains(document.activeElement) ? focusKey(document.activeElement) : null;
-  box.innerHTML = symptomChips(st);
+  box.innerHTML = chipsHtml(st);
   if (active) { const t = [...box.querySelectorAll('button')].find(x => focusKey(x) === active); if (t) t.focus(); }
 }
 
@@ -445,6 +445,7 @@ const actions = {
   day(el, e, ctx) { return goDay(ctx, addDays(st.date, Number(el.dataset.step))); },
   'go-today'(el, e, ctx) { return ctx.go('today', { date: null }); },
   week(el) { return showWeek(Number(el.dataset.step)); },
+  'edit-symptoms'(el, e, ctx) { return ctx.go('profile', { view: 'settings' }); },
   'edit-time'(el) {
     st.editTime = el.dataset.key;
     redraw('meds', '.med-time-input');
@@ -611,7 +612,7 @@ const forms = {
   },
   async health(form) {
     const err = form.querySelector('[data-error="health"]');
-    const values = Object.fromEntries(['sleepH', 'sleepM', 'bed', 'wake', 'steps', 'restingHr', 'hrv'].map(k => [k, form.elements[k].value.trim()]));
+    const values = Object.fromEntries(['sleepH', 'sleepM', 'bed', 'wake', 'steps', 'restingHr', 'hrv', 'spo2', 'spo2Min', 'respiratoryRate'].map(k => [k, form.elements[k].value.trim()]));
     const date = st.date;
     const fresh = (await api.getDay(date)).health; // the latest copy, in case a sync came in
     const res = correctHealth(fresh, values);

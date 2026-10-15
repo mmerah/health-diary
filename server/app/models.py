@@ -3,7 +3,7 @@ values the app does not expect. Unknown top-level keys are refused; unknown nest
 from datetime import date as Date
 from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, ConfigDict, Discriminator, Field, StringConstraints, Tag
 
 
 def _real_date(s):
@@ -65,7 +65,9 @@ class AdminFlag(Body):
 
 class PaperlessSettings(Body):
     token: Str(500) | None = None
-    tag: Str(100) | None = None
+    # Documents with ANY of these Paperless tags show in the diary.
+    tags: Annotated[list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]],
+                    Field(max_length=20)] | None = None
 
 
 # ---------- Profile and settings
@@ -115,10 +117,11 @@ class Meals(Part):
     dinner: Meal | None = None
 
 
-class Drinks(Part):
-    water: Annotated[int, Field(ge=0, le=50)] | None = None
-    coffee: Annotated[int, Field(ge=0, le=50)] | None = None
-    alcohol: Annotated[int, Field(ge=0, le=50)] | None = None
+CUSTOM_ID = r"^c_[a-z0-9]{2,24}$"  # the user's own items (catalog.py)
+# Water, coffee, alcohol, and the user's own counters. An id of a deleted counter stays valid:
+# old days keep their values.
+DrinkKey = Annotated[str, StringConstraints(pattern=r"^(water|coffee|alcohol|c_[a-z0-9]{2,24})$")]
+Drinks = Annotated[dict[DrinkKey, Annotated[int, Field(ge=0, le=999)] | None], Field(max_length=100)]
 
 
 class MedTaken(Part):
@@ -149,7 +152,7 @@ class DayLog(Body):
     v: Literal[2] = 2
     meals: Meals = Meals()
     snacks: Annotated[list[Meal], Field(max_length=20)] = []
-    drinks: Drinks = Drinks()
+    drinks: Drinks = {}
     meds: Meds = Meds()
     activities: Str(5000) = ""
     symptoms: Annotated[list[Symptom], Field(max_length=30)] = []
@@ -187,6 +190,9 @@ class DayHealth(Body):
     steps: Annotated[int, Field(ge=0, le=200_000)] | None = None
     restingHr: Annotated[int, Field(ge=20, le=250)] | None = None
     hrv: Annotated[int, Field(ge=1, le=400)] | None = None
+    spo2: Annotated[float, Field(ge=50, le=100)] | None = None
+    spo2Min: Annotated[int, Field(ge=50, le=100)] | None = None
+    respiratoryRate: Annotated[float, Field(ge=4, le=60)] | None = None
     workouts: Annotated[list[Workout], Field(max_length=50)] = []
     source: Literal["apple", "manual"] = "manual"
     syncedAt: Str(40) | None = None
@@ -222,7 +228,21 @@ class TemperatureIn(_Measurement):
     value: Annotated[float, Field(ge=34, le=43)]
 
 
-MeasurementIn = Annotated[WeightIn | BloodPressureIn | TemperatureIn, Field(discriminator="type")]
+class CustomIn(_Measurement):
+    """One of the user's own measurements (catalog). main.py checks the id and the range."""
+    type: Annotated[str, StringConstraints(pattern=CUSTOM_ID)]
+    value: Annotated[float, Field(allow_inf_nan=False)]
+
+
+def _measurement_kind(v):
+    t = v.get("type") if isinstance(v, dict) else getattr(v, "type", None)
+    return t if t in ("weight", "bp", "temp") else "custom"
+
+
+MeasurementIn = Annotated[
+    Annotated[WeightIn, Tag("weight")] | Annotated[BloodPressureIn, Tag("bp")] | Annotated[TemperatureIn, Tag("temp")]
+    | Annotated[CustomIn, Tag("custom")],
+    Discriminator(_measurement_kind)]
 
 
 # ---------- iPhone shortcut
@@ -236,12 +256,10 @@ class Ingest(Body):
     date: DATE_OR_EMPTY | None = None
     sleep: LINES = None
     steps_days: LINES = None
-    steps: SHORT = None
-    steps_yesterday: SHORT = None
-    resting_hr: SHORT = None
     resting_hr_days: LINES = None
-    hrv: SHORT = None
     hrv_days: LINES = None
+    spo2_days: LINES = None
+    respiratory_rate_days: LINES = None
     weight: SHORT = None
     weight_unit: Str(20) | None = None
     weight_date: Str(50) | None = None
@@ -250,8 +268,10 @@ class Ingest(Body):
 
 # ---------- Documents
 
-DocCategory = Literal["Blood test", "Cardiology", "Imaging", "Consultation letter", "Prescription",
-                      "Hospital stay", "Vaccination", "Other"]
+BUILT_IN_TYPES = ("Blood test", "Cardiology", "Imaging", "Consultation letter", "Prescription",
+                  "Hospital stay", "Vaccination", "Other")
+# A built-in type or one of the user's own (catalog). main.py checks it against the user's catalog.
+DocCategory = Annotated[str, StringConstraints(min_length=1, max_length=60, strip_whitespace=True)]
 TITLE = Annotated[str, StringConstraints(min_length=1, max_length=200, strip_whitespace=True)]
 
 
@@ -268,3 +288,46 @@ class DocumentPatch(Body):
     date: DATE | None = None
     title: TITLE | None = None
     category: DocCategory | None = None
+
+
+# ---------- The user's catalog (own symptoms, document types, measurements, counters)
+
+ID = Annotated[str, StringConstraints(pattern=CUSTOM_ID)]
+NUM = Annotated[float, Field(allow_inf_nan=False, ge=-1e9, le=1e9)]
+
+
+def Name(n):  # noqa: N802 (used like a type)
+    return Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=n)]
+
+
+class CatalogDocTypes(Part):
+    custom: Annotated[list[Str(60)], Field(max_length=60)] = []
+    hidden: Annotated[list[Literal[BUILT_IN_TYPES[:-1]]], Field(max_length=7)] = []  # never "Other"
+
+
+class CatalogMeasurement(Part):
+    id: ID
+    name: Name(60)
+    unit: Str(20) = ""
+    low: NUM | None = None
+    high: NUM | None = None
+    min: NUM | None = None
+    max: NUM | None = None
+    step: Annotated[float, Field(gt=0, le=1e6, allow_inf_nan=False)] | None = None
+    hidden: bool = False
+
+
+class CatalogCounter(Part):
+    id: ID
+    name: Name(40)
+    one: Str(20) = ""
+    many: Str(20) = ""
+    hidden: bool = False
+
+
+class Catalog(Body):
+    v: int = 1
+    symptoms: Annotated[list[Str(100)], Field(max_length=60)] | None = None
+    docTypes: CatalogDocTypes = CatalogDocTypes()
+    measurements: Annotated[list[CatalogMeasurement], Field(max_length=60)] = []
+    counters: Annotated[list[CatalogCounter], Field(max_length=60)] = []

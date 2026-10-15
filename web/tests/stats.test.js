@@ -245,3 +245,20 @@ test('home blood pressure: mean and number of readings', () => {
   const ms = [{ type: 'bp', date: '2026-10-03', value: { sys: 130, dia: 80 } }, { type: 'bp', date: '2026-10-04', value: { sys: 141, dia: 91 } }];
   assert.deepEqual(measurementStats('bp', ms, { from: '2026-10-01', to: '2026-10-14' }).mean, { sys: 136, dia: 86, n: 2 });
 });
+
+test('measurement and counter definitions: own items, and a fallback for deleted ones', async () => {
+  const { setCatalog } = await import('../js/core/schema.js');
+  const { measurementDefOf, counterList } = await import('../js/report/stats.js');
+  setCatalog({ measurements: [{ id: 'c_pain', name: 'Back pain', unit: '/10', high: 4, min: 0, max: 10, step: 1 }], counters: [{ id: 'c_tea', name: 'Tea', one: 'cup', many: 'cups' }] });
+  try {
+    assert.equal(measurementDefOf('c_pain').format(5), '5/10');
+    assert.match(measurementDefOf('c_pain').flag(6), /Above your range/);
+    assert.equal(measurementDefOf('c_gone').label, 'Other measurement');
+    const keys = counterList([day('2026-10-01', l => { l.drinks.c_old = 2; })]).map(c => [c.key, c.label]);
+    assert.deepEqual(keys.slice(3), [['c_tea', 'Tea'], ['c_old', 'Other counter']]);
+    const tea = drinkStats([day('2026-10-01', l => { l.drinks.c_tea = 1; }), day('2026-10-02', l => { l.drinks.c_tea = 3; })]).find(x => x.key === 'c_tea');
+    assert.deepEqual([tea.key, tea.recorded, tea.average, tea.max], ['c_tea', 2, 2, 3]);
+    const pain = measurementStats('c_pain', [{ type: 'c_pain', date: '2026-10-02', value: 6 }, { type: 'c_pain', date: '2026-10-03', value: 2 }], { from: '2026-10-01', to: '2026-10-14' });
+    assert.deepEqual([pain.label, pain.above.length, pain.below.length], ['Back pain', 1, 0]);
+  } finally { setCatalog(null); }
+});

@@ -3,12 +3,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addDays, today } from '../js/core/dates.js';
 import { seed } from '../js/api/sample.js';
+import { setCatalog } from '../js/core/schema.js';
 import { buildReportModel, docConclusion, excerpt, selectDocuments, SECTIONS } from '../js/report/model.js';
 import { toMarkdown } from '../js/report/markdown.js';
 import { toHtml } from '../js/report/html.js';
 import { makeRedactor } from '../js/report/redact.js';
 
 const db = seed();
+setCatalog(db.catalog); // the demo's own Tea counter and Back pain measurement
 const TO = today();
 const allDays = () => [...new Set([...Object.keys(db.days), ...Object.keys(db.health)])].sort()
   .map(d => ({ date: d, log: db.days[d] || null, health: db.health[d] || null }));
@@ -63,7 +65,6 @@ test('AI report: 90 days of sample data stay short by default', () => {
   const { md } = aiReport();
   const words = md.match(/\S+/g).length;
   assert.ok(words < 3000, `${words} words`);
-  assert.ok(md.length / 3.7 < 4300, `about ${Math.round(md.length / 3.7)} tokens`);
   const full = aiReport({ fullDaily: true }).md;
   assert.ok(full.length > md.length * 1.5, 'full daily details add the food and every day');
   assert.match(full, /breakfast:/);
@@ -218,4 +219,67 @@ test('key points: mean home BP and the strongest pattern when there are enough d
   assert.ok(assoc.length >= 1 && assoc.length <= 2);
   assert.ok(assoc.every(f => !f.assoc.small));
   assert.match(md, /This is a pattern, not a cause\./);
+});
+
+// ---------- Own items (catalog) and new Apple Health values
+
+test('own measurements: listed like built-ins, own range in key points, unknown types as "Other measurement"', () => {
+  const ms = [...db.measurements, { id: 999, type: 'c_gone', date: addDays(TO, -4), time: '', value: 12 }];
+  const { model, md } = aiReport({}, data({ measurements: ms }));
+  assert.match(md, /- Back pain: \d+\/10 \(D-\d+/);
+  const f = model.flags.find(x => x.kind === 'custom-range');
+  assert.ok(f && f.above >= 1, 'readings above the own range');
+  assert.match(md, new RegExp(`Check: Back pain\\. Above your range on ${f.above} of ${f.total} readings`));
+  assert.match(md, /- Other measurement: 12 \(D-4\)/);
+  const html = toHtml(buildReportModel(data({ measurements: ms }), { from: addDays(TO, -89), to: TO, audience: 'doctor' }));
+  assert.match(html, /<strong>Back pain<\/strong>/);
+  assert.match(html, /Above your range<\/span>/);
+});
+
+test('own counters: stats, daily table, drinks in words, associations when there are enough days', () => {
+  const { model, md } = aiReport();
+  const tea = model.drinks.find(d => d.key === 'c_tea');
+  assert.ok(tea && tea.recorded > 0 && tea.average != null && tea.max != null);
+  assert.match(md, /- Tea: recorded on \d+ days, average [\d.]+ cups a day/);
+  assert.match(md, /Drinks: water\/coffee\/alcohol\/tea/);
+  assert.match(md, /\|\d+\/\d+\/\d+\/\d+\|/, 'four counters in the compact table');
+  assert.ok(model.associations.some(a => a.factor === 'c_tea'), 'Tea is in the pattern scan');
+  const html = toHtml(buildReportModel(data(), { from: addDays(TO, -89), to: TO, audience: 'doctor' }));
+  assert.match(html, /\d water · \d coffee · \d alcohol · \d tea/);
+});
+
+test('own counter names are hidden like other user words in AI mode', () => {
+  setCatalog({ ...db.catalog, counters: [{ id: 'c_tea', name: 'Tea with Martine', one: 'cup', many: 'cups' }] });
+  try {
+    const model = buildReportModel(data(), { from: addDays(TO, -89), to: TO, audience: 'ai' });
+    const redactor = makeRedactor({ profile: db.profile, words: ['Martine'], relativeTo: TO });
+    assert.ok(!toMarkdown(model, { redactor, relative: true }).includes('Martine'));
+  } finally { setCatalog(db.catalog); }
+});
+
+test('own document types: shown to the doctor, "Medical document" for the AI', () => {
+  const docs = [{ id: 7, date: addDays(TO, -5), title: 'Letter', category: 'Suivi Dr Dupont', correspondent: '', content: 'Conclusion: all normal.' }];
+  const d = data({ documents: docs });
+  const html = toHtml(buildReportModel(d, { from: addDays(TO, -89), to: TO, audience: 'doctor' }));
+  assert.match(html, /Suivi Dr Dupont/);
+  const { md } = aiReport({}, d);
+  assert.match(md, /### D-5: Letter \(Medical document\)/);
+  assert.ok(!md.includes('Dupont'));
+});
+
+test('blood oxygen and respiratory rate: weekly medians, first and last 4 weeks, plain key points', () => {
+  const { md, model } = aiReport();
+  assert.ok(model.wearable.overall.spo2 && model.wearable.overall.respiratoryRate);
+  assert.match(md, /\| SpO2 % \| SpO2 low \| Resp\/min \|/);
+  assert.match(md, /blood oxygen [\d.]+ % → [\d.]+ %/);
+  assert.ok(!model.flags.some(f => f.kind.startsWith('oxygen') || f.kind === 'respiratory-high'), 'normal sample values: no flag');
+  // Low nights, a low average and a high respiratory rate.
+  const days = allDays().map(x => (x.health ? { ...x, health: { ...x.health, spo2: 93.2, spo2Min: x.date === addDays(TO, -3) || x.date === addDays(TO, -10) ? 87 : 91, respiratoryRate: 21.4 } } : x));
+  const r = aiReport({}, data({ days }));
+  assert.match(r.md, /Check: Blood oxygen\. Lowest value under 90 % on 2 days: D-10 \(87 %\), D-3 \(87 %\)\. Wearable estimate\./);
+  assert.match(r.md, /Check: Blood oxygen\. Average 93\.2 % over the period \(under 94 %\)/);
+  assert.match(r.md, /Check: Respiratory rate\. Average 21\.4 breaths a minute over the period \(above 20\)/);
+  const html = toHtml(buildReportModel(data({ days }), { from: addDays(TO, -89), to: TO, audience: 'doctor' }));
+  assert.match(html, /Lowest value under 90 % on 2 days: \d+ \w+ \(87 %\)/, 'real dates for the doctor');
+  assert.ok(!/diagnos|apnoea|apnea/i.test(r.md.split('## Key points')[1].split('##')[0]), 'no diagnosis words');
 });

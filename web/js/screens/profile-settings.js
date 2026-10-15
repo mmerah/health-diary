@@ -5,9 +5,12 @@ import { fullLabel, isValidDate } from '../core/dates.js';
 import { confirmTwice, copyText, ICON, toast } from '../core/ui.js';
 import { busy, clearErrors, errorBox, pwField, showError, togglePassword, updatePwHint } from './form-fields.js';
 import { dateTimeLabel, newPasswordError } from './profile-account.js';
+import { listsCard } from './profile-lists.js';
+import { DEFAULT_TAGS, TAG_SEARCH_FROM, tagRows, tagsOf, tagsText, toggleTag } from './profile-paperless.js';
 
 const DOCS_URL = 'https://github.com/mmerah/health-diary/blob/main/docs/shortcut.md';
 let S = null; // { settings, paperless, users }
+let T = null; // Paperless tags: { list: [{ name, documentCount }] | null, error, query }
 
 /** Loads what the Settings view needs. Parts the server cannot give are null. */
 export async function loadSettings(ctx) {
@@ -90,6 +93,65 @@ function appleCard(ctx) {
     ${imp}`);
 }
 
+/** The tag list of the Paperless card: loading, error, or checkboxes with document counts. */
+function tagsHtml() {
+  const pl = S.paperless;
+  const tags = tagsOf(pl);
+  if (!pl.hasToken) {
+    return `<p class="hint">Your Paperless tags appear here after you save the token. Until then, the diary uses the ${esc(tagsText(tags))}.</p>`;
+  }
+  const missing = (pl.missingTags || []).map(t => `<li><span class="grow">Not found in Paperless: <strong>${esc(t)}</strong>.</span>
+      <button type="button" class="btn small" data-act="pl-tag-remove" data-name="${esc(t)}">Remove it</button></li>`).join('');
+  const missingHtml = missing ? `<div class="notice is-caution pl-missing">${ICON.alert}<div><ul class="rows">${missing}</ul></div></div>` : '';
+  if (!T || (!T.list && !T.error)) return `${missingHtml}<p class="hint" role="status">Loading your Paperless tags…</p>`;
+  if (T.error) {
+    return `${missingHtml}<p class="field-error">${ICON.alert}<span>Could not load your tags. ${esc(T.error)}</span></p>
+      <p class="hint">The diary now uses the ${esc(tagsText(tags))}.</p>
+      <div class="btn-row"><button type="button" class="btn small" data-act="pl-tags-load">Try again</button></div>`;
+  }
+  const many = T.list.length >= TAG_SEARCH_FROM;
+  return `${missingHtml}<p class="hint">Records shows the Paperless documents that have one of the ticked tags.</p>
+    ${many ? `<div class="field"><label class="sr-only" for="pl-tag-search">Search tags</label>
+      <input id="pl-tag-search" type="search" placeholder="Search tags" autocomplete="off" value="${esc(T.query)}"></div>` : ''}
+    <div id="pl-tag-list">${tagListHtml()}</div>
+    <p class="hint" id="pl-tags-status" aria-live="polite"></p>`;
+}
+
+function tagListHtml() {
+  const rows = tagRows(T.list, tagsOf(S.paperless), T.query);
+  if (!T.list.length) return '<p class="hint">Your Paperless has no tags yet. Add a tag to your medical documents in Paperless.</p>';
+  if (!rows.length) return '<p class="hint">No tag matches.</p>';
+  return `<ul class="rows pl-tag-list">${rows.map((r, i) => `<li><label class="check" for="pl-tag-${i}">
+      <input type="checkbox" id="pl-tag-${i}" data-act="pl-tag" data-name="${esc(r.name)}"${r.checked ? ' checked' : ''}>
+      <span class="grow">${esc(r.name)}</span><span class="muted pl-count">${esc(plural(r.count, 'document'))}</span></label></li>`).join('')}</ul>`;
+}
+
+function redrawTags() {
+  const el = document.getElementById('pl-tags');
+  if (el) el.innerHTML = tagsHtml();
+}
+
+/** Loads the user's Paperless tags into the card (after the screen shows, or after a new token). */
+export async function loadTags(ctx) {
+  if (!S || !S.paperless || !S.paperless.hasToken || !document.getElementById('pl-tags')) return;
+  T = { list: null, error: null, query: T ? T.query : '' };
+  redrawTags();
+  try { T.list = await ctx.api.listPaperlessTags(); } catch (e) { T.error = e.message || 'Paperless did not answer.'; }
+  redrawTags();
+}
+
+/** Saves the ticked tags. The server answers with the new Paperless settings. */
+async function saveTags(ctx, tags) {
+  const before = S.paperless;
+  try {
+    S.paperless = { ...before, ...(await ctx.api.savePaperless({ tags })) };
+    if (!Array.isArray(S.paperless.tags)) S.paperless.tags = tags;
+  } catch (e) {
+    S.paperless = before;
+    throw new Error(`Not saved. ${e.message}`);
+  }
+}
+
 function paperlessCard(ctx) {
   const { api } = ctx;
   const pl = S.paperless;
@@ -102,21 +164,20 @@ function paperlessCard(ctx) {
       <details class="settings-more admin-detail"><summary>For the administrator</summary>
         <p class="hint">Set <span class="tag">PAPERLESS_URL</span> on the server, then restart Health Diary.</p></details>`;
   } else {
-    const ph = pl.hasToken ? (pl.tokenFromServer ? 'Set by the server. Type a token to replace it.' : 'Saved. Type a new token to replace it.') : 'Paste your API token';
-    body = `<p class="hint">Records shows your documents from Paperless that have your tag. Use a separate Paperless user for the diary. Give this user read access to your medical documents only. Then, in Paperless, open the profile of this user and create an <strong>API Auth Token</strong>.</p>
+    const ph = pl.hasToken ? 'Saved. Type a new token to replace it.' : 'Paste your API token';
+    body = `<p class="hint">Records shows your documents from Paperless that have one of your tags. Use a separate Paperless user for the diary. Give this user read access to your medical documents only. Then, in Paperless, open the profile of this user and create an <strong>API Auth Token</strong>.</p>
       <form class="stack" data-form="paperless" novalidate>
         <div class="field"><label class="label" for="pl-token">API token</label>
           <input id="pl-token" name="token" type="password" autocomplete="off" spellcheck="false" placeholder="${esc(ph)}" aria-describedby="pl-token-hint">
           <p class="hint" id="pl-token-hint">${pl.hasToken ? 'A token is saved. For your safety, it is never shown.' : 'No token saved yet.'}</p></div>
-        <div class="field"><label class="label" for="pl-tag">Tag</label>
-          <input id="pl-tag" name="tag" type="text" autocomplete="off" maxlength="100" value="${esc(pl.tag || '')}" aria-describedby="pl-tag-hint">
-          <p class="hint" id="pl-tag-hint">Records shows the documents that have this tag.</p></div>
         ${errorBox('pl-error')}
-        <div class="btn-row"><button type="submit" class="btn primary">Save</button>
-          <button type="button" class="btn" data-act="pl-test">Test connection</button>
-          ${pl.hasToken && !pl.tokenFromServer ? '<button type="button" class="btn ghost" data-act="pl-remove">Remove token</button>' : ''}</div>
+        <div class="btn-row"><button type="submit" class="btn primary">Save token</button>
+          ${pl.hasToken ? '<button type="button" class="btn" data-act="pl-test">Test connection</button><button type="button" class="btn ghost" data-act="pl-remove">Remove token</button>' : ''}</div>
         <p class="hint" id="pl-status" aria-live="polite"></p>
-      </form>`;
+      </form>
+      <hr class="divider">
+      <fieldset class="pl-tags"><legend class="label">Tags to include</legend>
+        <div id="pl-tags">${tagsHtml()}</div></fieldset>`;
   }
   return card('set-paperless', 'Paperless', body);
 }
@@ -242,7 +303,7 @@ export function settingsView(ctx) {
   const showUsers = api.can.accounts && ctx.user && ctx.user.isAdmin && S.users;
   return `${api.isDemo ? demoCard() : ''}
     <div class="profile-grid">
-      <div class="profile-col">${displayCard(ctx)}${appleCard(ctx)}${paperlessCard(ctx)}</div>
+      <div class="profile-col">${displayCard(ctx)}${listsCard()}${appleCard(ctx)}${paperlessCard(ctx)}</div>
       <div class="profile-col">${accountCard(ctx)}${showUsers ? usersCard(ctx) : ''}${aboutCard()}</div>
     </div>`;
 }
@@ -307,11 +368,23 @@ export const settingsActions = {
     el.disabled = true;
     try {
       const docs = await ctx.api.refreshDocuments();
-      st.textContent = `Connected. Paperless has ${plural(docs.length, 'document')} with your tag.`;
+      st.textContent = `Connected. ${plural(docs.filter(d => d.source !== 'diary').length, 'document')} from Paperless have your ${tagsText(tagsOf(S.paperless))}.`;
     } catch (err) {
       st.textContent = '';
       throw new Error(`Connection failed. ${err.message}`);
     } finally { el.disabled = false; }
+  },
+
+  'pl-tags-load'(el, e, ctx) { return loadTags(ctx); },
+
+  async 'pl-tag-remove'(el, e, ctx) {
+    const name = el.dataset.name;
+    const tags = tagsOf(S.paperless).filter(t => t !== name);
+    await saveTags(ctx, tags.length ? tags : [...DEFAULT_TAGS]);
+    S.paperless.missingTags = (S.paperless.missingTags || []).filter(t => t !== name);
+    redrawTags();
+    toast(`${name} removed from your tags`);
+    document.querySelector('#pl-tags input, #pl-tags button')?.focus();
   },
 
   async 'pl-remove'(el, e, ctx) {
@@ -396,18 +469,13 @@ export const settingsForms = {
   async paperless(form, e, ctx) {
     clearErrors(form);
     const token = form.token.value.trim();
-    const tag = form.tag.value.trim();
-    if (!tag) return showError('pl-error', 'Enter a tag, for example medical.', form.tag);
+    if (!token) return showError('pl-error', 'Paste your API token first.', form.token);
     await busy(form, async () => {
       try {
-        // No token typed: keep the saved one (the server keeps it when token is missing).
-        S.paperless = await ctx.api.savePaperless(token ? { token, tag } : { tag });
+        S.paperless = await ctx.api.savePaperless({ token });
       } catch (err) { return showError('pl-error', err.message); }
-      form.token.value = '';
-      form.token.placeholder = S.paperless.hasToken ? 'Saved. Type a new token to replace it.' : 'Paste your API token';
-      document.getElementById('pl-token-hint').textContent = S.paperless.hasToken ? 'A token is saved. For your safety, it is never shown.' : 'No token saved yet.';
-      document.getElementById('pl-status').textContent = 'Saved. Tap Test connection to check it.';
-      toast('Paperless settings saved');
+      toast('Paperless token saved');
+      await ctx.refresh(); // shows the tag list and the token buttons
     });
   },
 
@@ -470,8 +538,35 @@ export const settingsForms = {
   },
 };
 
+async function onTagChange(el, ctx) {
+  const name = el.dataset.name;
+  const status = document.getElementById('pl-tags-status');
+  const now = tagsOf(S.paperless);
+  const next = toggleTag(now, name, el.checked);
+  if (!next.length) {
+    el.checked = true;
+    if (status) status.textContent = 'Keep at least one tag. Tick another tag first.';
+    return;
+  }
+  el.disabled = true;
+  try {
+    await saveTags(ctx, next);
+    if (status) status.textContent = `Saved. Records uses the ${tagsText(tagsOf(S.paperless))}.`;
+  } catch (e) {
+    el.checked = !el.checked;
+    if (status) status.textContent = e.message;
+  } finally { el.disabled = false; }
+}
+
 /** Live password hints. Returns true when it handled the event. */
 export function settingsInput(el, e, ctx) {
+  if (el.id === 'pl-tag-search') {
+    T.query = el.value;
+    const list = document.getElementById('pl-tag-list');
+    if (list) list.innerHTML = tagListHtml();
+    return true;
+  }
+  if (el.dataset.act === 'pl-tag') { onTagChange(el, ctx); return true; }
   if (el.id === 'pw-new') { updatePwHint(el, ctx.user.username); return true; }
   if (el.id === 'nu-pw') { updatePwHint(el, document.getElementById('nu-name').value); return true; }
   return false;

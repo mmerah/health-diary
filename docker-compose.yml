@@ -4,9 +4,11 @@ services:
     # To build from source instead, replace the line above with:  build: .
     container_name: health-diary
     restart: unless-stopped
+    # Settings: TZ, PUID, PGID, DIARY_SECRET_KEY, PAPERLESS_URL, PAPERLESS_PUBLIC_URL,
+    # FORWARDED_ALLOW_IPS. See .env.example.
     env_file: .env
     volumes:
-      # The database (diary.db) and secret.key. Back up this folder.
+      # The database, the documents and secret.key. Back up this folder.
       - ./data:/data
     # Hardening. The entrypoint starts as root only to fix the owner of ./data,
     # then runs the app as PUID:PGID with no extra rights.

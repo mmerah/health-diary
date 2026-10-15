@@ -2,7 +2,8 @@
 
 Both paths end in the same per-day "health" object that the front end shows:
   { sleep: {total, deep, rem, core, awake, bed, wake, naps: [{start, end, minutes}], inBedOnly},
-    steps, restingHr, hrv, workouts: [{type, minutes, start}], source: 'apple', syncedAt, edited: [...] }
+    steps, restingHr, hrv, spo2, spo2Min, respiratoryRate, workouts: [{type, minutes, start}],
+    source: 'apple', syncedAt, edited: [...] }
 Fields listed in "edited" were corrected by hand. A sync or an import never overwrites them.
 
 Times keep the UTC offset that came with each sample: after a flight, bed and wake times
@@ -26,13 +27,12 @@ from . import db
 
 log = logging.getLogger("uvicorn.error")
 TZ = ZoneInfo(os.environ.get("TZ") or "UTC")
-MAX_UNPACKED = int(os.environ.get("MAX_IMPORT_UNPACKED_MB", "4096")) * 1024 * 1024
 MAX_DEPTH = 32
 MAX_RATIO = 200  # Apple's export.xml packs about 10 to 20 times; far more means a zip bomb
 
 # Values outside these ranges are typing or unit mistakes. They are ignored.
 RANGES = {"steps": (0, 200_000), "restingHr": (20, 250), "hrv": (1, 400), "weight": (20, 300),
-          "temp": (34, 43), "sys": (60, 260), "dia": (30, 160)}
+          "temp": (34, 43), "sys": (60, 260), "dia": (30, 160), "spo2": (50, 100), "respiratoryRate": (4, 60)}
 LB, STONE = 0.45359237, 6.35029318
 
 
@@ -337,6 +337,39 @@ def _per_day(lines, field, integer=False):
     return {d: round(sum(x) / len(x)) for d, x in values.items()}
 
 
+def spo2(raw):
+    """Oxygen saturation in %. Apple Health stores a fraction (0.97); Shortcuts may show 97 or "97 %"."""
+    v = _num(raw)
+    if v is not None and 0 < v <= 1:
+        v *= 100
+    return plausible("spo2", v)
+
+
+def daily_stats(values):
+    """{date: [values]} -> {date: (average, lowest)}."""
+    return {d: (sum(x) / len(x), min(x)) for d, x in values.items() if x}
+
+
+def _lines_by_day(lines, reader):
+    values = defaultdict(list)
+    for v, s, _, _ in parse_lines(lines):
+        n = reader(v)
+        if n is not None:
+            values[s.date()].append(n)
+    return values
+
+
+def oxygen_fields(spo2_values, rr_values):
+    """{date: {spo2, spo2Min, respiratoryRate}}: average % with 1 decimal, lowest % as a whole
+    number, and average breaths per minute with 1 decimal."""
+    out = defaultdict(dict)
+    for d, (avg, low) in daily_stats(spo2_values).items():
+        out[d].update(spo2=round(avg, 1), spo2Min=round(low))
+    for d, (avg, _) in daily_stats(rr_values).items():
+        out[d]["respiratoryRate"] = round(avg, 1)
+    return out
+
+
 def ingest_shortcut(uid, p):
     """Handles the JSON that the iPhone shortcut sends. See docs/shortcut.md."""
     now = datetime.now(TZ)
@@ -346,11 +379,6 @@ def ingest_shortcut(uid, p):
 
     samples = [Sample(sleep_stage(v), s, e, src) for v, s, e, src in parse_lines(p.get("sleep"))]
     fresh["sleep"] = summarize_sleep([s for s in samples if night_of(s.end) == day])
-    fresh["steps"] = read(p.get("steps"), "steps", integer=True)
-    fresh["restingHr"] = read(p.get("resting_hr"), "restingHr")
-    fresh["hrv"] = read(p.get("hrv"), "hrv")
-    for k in ("steps", "restingHr", "hrv"):
-        fresh[k] = round(fresh[k]) if fresh[k] is not None else None
     if p.get("workouts") is not None:
         fresh["workouts"] = [workout(v, s, e) for v, s, e, _ in parse_lines(p.get("workouts")) if s.date() == day]
 
@@ -360,10 +388,11 @@ def ingest_shortcut(uid, p):
                                 ("hrv_days", "hrv", False)):
         for d, v in _per_day(p.get(key), field, integer).items():
             daily[d][field] = v
-    # Yesterday's final step count, sent the next morning.
-    ys = read(p.get("steps_yesterday"), "steps", integer=True)
-    if ys is not None:
-        daily[day - timedelta(days=1)]["steps"] = round(ys)
+    # Oxygen and breathing (Apple Watch), measured during the night: average and lowest of each day.
+    oxygen = oxygen_fields(_lines_by_day(p.get("spo2_days"), spo2),
+                           _lines_by_day(p.get("respiratory_rate_days"), lambda v: read(v, "respiratoryRate")))
+    for d, values in oxygen.items():
+        daily[d].update(values)
 
     kg = parse_weight(p.get("weight"), p.get("weight_unit")) if p.get("weight") not in (None, "") else None
 
@@ -395,8 +424,11 @@ TYPES = {
     "HKQuantityTypeIdentifierBloodPressureSystolic": "sys",
     "HKQuantityTypeIdentifierBloodPressureDiastolic": "dia",
     "HKQuantityTypeIdentifierBodyTemperature": "temp",
+    "HKQuantityTypeIdentifierOxygenSaturation": "spo2",
+    "HKQuantityTypeIdentifierRespiratoryRate": "respiratoryRate",
 }
 _TOO_BIG = "This file unpacks to too much data. Upload the export.zip from the Health app."
+_NO_ROOM = "There is not enough free disk space on the server to read this file. Ask the administrator."
 
 
 class _Limited:
@@ -428,7 +460,7 @@ def _to_kg(v, unit):
 def _read_export(fh):
     """Reads export.xml as a stream and returns everything the diary uses, grouped by day."""
     steps = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))  # day -> hour -> source -> sum
-    hr, hrv = defaultdict(list), defaultdict(list)
+    hr, hrv, oxygen, breathing = defaultdict(list), defaultdict(list), defaultdict(list), defaultdict(list)
     weights, temps, nights, workouts = [], [], defaultdict(list), defaultdict(list)
     bp = defaultdict(dict)  # time -> {sys, dia}
 
@@ -449,6 +481,10 @@ def _read_export(fh):
                 steps[d][start.hour][el.get("sourceName", "")] += v
             elif kind == "restingHr" and plausible(kind, v):
                 hr[d].append(v)
+            elif kind == "spo2" and spo2(v) is not None:
+                oxygen[d].append(spo2(v))
+            elif kind == "respiratoryRate" and plausible(kind, v):
+                breathing[d].append(v)
             elif kind == "hrv" and plausible(kind, v):
                 hrv[d].append(v)
             elif kind == "weight" and plausible(kind, _to_kg(v, el.get("unit"))):
@@ -489,6 +525,8 @@ def _read_export(fh):
         days[d]["steps"] = plausible("steps", round(sum(max(src.values()) for src in hours.values())))
     for d, values in hr.items():
         days[d]["restingHr"] = round(sum(values) / len(values))
+    for d, values in oxygen_fields(oxygen, breathing).items():
+        days[d].update(values)
     for d, values in hrv.items():
         days[d]["hrv"] = round(sum(values) / len(values))
     for d, items in workouts.items():
@@ -514,13 +552,19 @@ def import_export(uid, path):
         if zipfile.is_zipfile(path):
             zf = stack.enter_context(zipfile.ZipFile(path))
             info = _find_export_xml(zf)
-            if info.file_size > MAX_UNPACKED or (
-                    info.file_size > 1024 * 1024 and info.file_size > MAX_RATIO * max(info.compress_size, 1)):
+            # A zip bomb packs far more than Apple's export (10 to 20 times). The unpacked data is
+            # read as a stream, but it must not be larger than the free disk space either.
+            if info.file_size > 1024 * 1024 and info.file_size > MAX_RATIO * max(info.compress_size, 1):
                 raise ImportRefused(_TOO_BIG)
+            if info.file_size > db.room():
+                raise ImportRefused(_NO_ROOM)
+            limit = info.file_size
             fh = stack.enter_context(zf.open(info))
         else:
+            limit = os.path.getsize(path)
             fh = stack.enter_context(open(path, "rb"))
-        days, measurements, skipped = _read_export(_Limited(fh, MAX_UNPACKED))
+        # Never read more than the zip header says, even if it lies.
+        days, measurements, skipped = _read_export(_Limited(fh, limit))
 
     dates = sorted(d.isoformat() for d in days)
     added = {}

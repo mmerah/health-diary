@@ -4,7 +4,24 @@
 //  - `skip` is a partial day (today) that is left out of averages.
 import { addDays, diffDays, hmToMin, minToHm } from '../core/dates.js';
 import { mean, median } from '../core/math.js';
-import { DRINKS, MEASUREMENTS, periodOf } from '../core/schema.js';
+import { counterTypes, CUSTOM_ID, measurementDef, periodOf } from '../core/schema.js';
+
+/** A measurement definition: built-in or the user's own; a type that no longer exists is "Other measurement". */
+export const measurementDefOf = type => measurementDef(type) || {
+  label: 'Other measurement', custom: true, format: v => String(typeof v === 'object' ? JSON.stringify(v) : v), flag: () => null,
+};
+
+/** Counters: water, coffee, alcohol, the user's own (also hidden ones), and counters found in old logs ("Other counter"). */
+export function counterList(days = []) {
+  const list = counterTypes({ all: true });
+  const known = new Set(list.map(c => c.key));
+  for (const d of days) {
+    for (const k of Object.keys((d.log && d.log.drinks) || {})) {
+      if (!known.has(k) && CUSTOM_ID.test(k)) { known.add(k); list.push({ key: k, label: 'Other counter', one: 'time', many: 'times', custom: true }); }
+    }
+  }
+  return list;
+}
 
 // ---------- Small helpers
 
@@ -170,11 +187,11 @@ export function symptomStats(days, { from, to } = {}) {
 // ---------- Drinks (null = not recorded, left out)
 
 export function drinkStats(days, { skip } = {}) {
-  return DRINKS.map(def => {
+  return counterList(days).map(def => {
     const rec = days.filter(d => d.log && d.date !== skip && d.log.drinks[def.key] != null);
     const v = rec.map(d => d.log.drinks[def.key]);
     return {
-      key: def.key, label: def.label, one: def.one, many: def.many,
+      key: def.key, label: def.label, one: def.one, many: def.many, custom: !!def.custom,
       recorded: rec.length,
       average: v.length ? mean(v) : null,
       max: v.length ? Math.max(...v) : null,
@@ -193,6 +210,10 @@ const METRICS = {
   steps: h => (h.steps || null),
   restingHr: h => (h.restingHr || null),
   hrv: h => (h.hrv || null),
+  // Apple Watch: blood oxygen (daily average and lowest, %) and respiratory rate (breaths per minute).
+  spo2: h => (h.spo2 || null),
+  spo2Min: h => (h.spo2Min || null),
+  respiratoryRate: h => (h.respiratoryRate || null),
 };
 // Today's steps and heart data are not complete; last night's sleep is.
 const PARTIAL_OK = new Set(['sleep', 'bed']);
@@ -226,6 +247,10 @@ export function wearableStats(days, { from, to, skip } = {}) {
     days: withHealth.length, overall: summarize(days), weeks, compare,
     workouts: Object.values(wk).sort((a, b) => b.count - a.count),
     shortNights: metricValues(days, 'sleep', skip).filter(v => v < 360).length,
+    // Days whose lowest blood oxygen was under 90 %, and the averages of the period.
+    lowOxygenDays: days.filter(d => d.date !== skip && d.health && d.health.spo2Min != null && d.health.spo2Min < 90).map(d => ({ date: d.date, value: d.health.spo2Min })),
+    spo2Mean: mean(metricValues(days, 'spo2', skip)),
+    respiratoryMean: mean(metricValues(days, 'respiratoryRate', skip)),
   };
 }
 
@@ -246,10 +271,16 @@ const FACTORS = [
  */
 export function associations(days, symptoms, { skip, max = 4 } = {}) {
   const logged = days.filter(d => d.logged && d.date !== skip);
+  // The user's own counters join the scan when they were recorded on enough days, with some days at 0 and some above.
+  const own = counterList(days).filter(c => c.custom).filter(c => {
+    const v = logged.map(d => d.log.drinks[c.key]).filter(x => x != null);
+    return v.length >= 14 && v.filter(x => x > 0).length >= 5 && v.filter(x => x === 0).length >= 5;
+  }).map(c => ({ key: c.key, label: c.label, a: c.label, b: `no ${c.label}`, custom: true,
+    test: d => (d.log.drinks[c.key] == null ? null : d.log.drinks[c.key] > 0) }));
   const out = [];
   for (const s of symptoms.filter(x => x.days >= 4).slice(0, max)) {
     const has = new Set(s.dates);
-    for (const f of FACTORS) {
+    for (const f of [...FACTORS, ...own]) {
       const a = { days: 0, with: 0 }, b = { days: 0, with: 0 };
       for (const d of logged) {
         const v = f.test(d);
@@ -260,7 +291,7 @@ export function associations(days, symptoms, { skip, max = 4 } = {}) {
       }
       if (!a.days || !b.days || !(a.with + b.with)) continue;
       const ra = a.with / a.days, rb = b.with / b.days;
-      out.push({ symptom: s.name, factor: f.key, label: f.label, aLabel: f.a, bLabel: f.b, a, b,
+      out.push({ symptom: s.name, factor: f.key, label: f.label, aLabel: f.a, bLabel: f.b, custom: !!f.custom, a, b,
         rateA: ra, rateB: rb, diff: ra - rb, small: a.days < 8 || b.days < 8 || a.with + b.with < 5 });
     }
   }
@@ -271,11 +302,16 @@ export function associations(days, symptoms, { skip, max = 4 } = {}) {
 
 /** One type: values in the period, the last one before as a baseline, and what stands out. */
 export function measurementStats(type, list, { from, to }) {
-  const def = MEASUREMENTS[type];
+  const def = measurementDefOf(type);
   const sorted = list.filter(m => m.type === type).sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || '')));
   const rows = sorted.filter(m => m.date >= from && m.date <= to);
   const before = sorted.filter(m => m.date < from).slice(-1)[0] || null;
-  const res = { type, label: def.label, rows, before, flagged: rows.filter(m => def.flag(m.value)) };
+  const res = { type, label: def.label, custom: !!def.custom, rows, before, flagged: rows.filter(m => def.flag(m.value)) };
+  if (def.custom) {
+    // Own measurements: readings above or below the user's own range.
+    res.above = rows.filter(m => def.high != null && m.value > def.high);
+    res.below = rows.filter(m => def.low != null && m.value < def.low);
+  }
   if (type === 'weight' && rows.length) {
     const start = rows.length >= 2 ? rows[0] : before;
     const end = rows[rows.length - 1];

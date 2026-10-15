@@ -132,17 +132,23 @@ const DOMAIN_RE = /(?<![\p{L}\p{N}@.\-])[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?(?:\.[a-
 const IBAN_RE = /(?<![\p{L}\p{N}])[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){2,7}(?:[ ]?[A-Z0-9]{1,3})?(?![\p{L}\p{N}])/gu;
 
 // Hospitals and clinics with their name: "CHU de Nantes", "Hôpital Saint-Louis", "Massachusetts General Hospital".
-const HOSP_WORD = String.raw`(?:CHU|CHR|CHRU|CH|Hôpital|Hopital|HÔPITAL|HOPITAL|Clinique|CLINIQUE|Centre\s+[Hh]ospitalier(?:\s+[Uu]niversitaire)?|CENTRE\s+HOSPITALIER|Centre\s+m[ée]dical|Cabinet(?:\s+m[ée]dical)?|Hospital|HOSPITAL|Medical\s+Cent(?:er|re)|Klinikum|Klinik|Krankenhaus|Spital|Praxis|Polyclinique|POLYCLINIQUE|Infirmary|Groupe\s+[Hh]ospitalier|\p{Lu}\p{Ll}+(?:spital|klinikum|klinik|krankenhaus|praxis))`;
-// German nouns are capitalised: "im Spital Behandlung" is not a hospital name.
-const NOT_A_NAME = String.raw`(?!(?:Aufenthalt|Behandlung|Eintritt|Austritt|Aufnahme|Entlassung|Fieber|Schmerzen|Bericht|Besuch|Termin|Kontrolle|Notfall|Station|Abteilung|Operation|Untersuchung)\b)`;
-const HOSP_NAME = String.raw`(?:(?:de|du|des|d'|d’|la|le|les|of|the|der|die|das|am|an|im|St\.?|Ste)[ \t]+)*${NOT_A_NAME}\p{Lu}[\p{L}'’\-]*\.?`;
+const HOSP_WORD = String.raw`(?:CHU|CHR|CHRU|CH|Hôpital|Hopital|HÔPITAL|HOPITAL|Clinique|CLINIQUE|Centre\s+[Hh]ospitalier(?:\s+[Uu]niversitaire)?|CENTRE\s+HOSPITALIER|Centre\s+m[ée]dical|Cabinet(?:\s+m[ée]dical)?|Hospital|HOSPITAL|Medical\s+Cent(?:er|re)|Klinikum|Klinik|Krankenhaus|Spital|Praxis|Polyclinique|POLYCLINIQUE|Infirmary|Groupe\s+[Hh]ospitalier|Ospedale(?:\s+[Rr]egionale)?|Clinica|Casa\s+di\s+cura|Istituto|Clinic|\p{Lu}\p{Ll}+(?:spital|klinikum|klinik|krankenhaus|praxis))`;
+// A name part after the word: a proper word (capital, then a small letter) or one capital letter, no digits, never a
+// lab test or a unit ("Kantonsspital INR 2.5", "Klinik Hirslanden HbA1c 6.1 %"), and never a German common noun.
+const NOT_A_NAME = String.raw`(?!(?:Aufenthalt|Behandlung|Eintritt|Austritt|Aufnahme|Entlassung|Fieber|Schmerzen|Bericht|Besuch|Termin|Kontrolle|Notfall|Station|Abteilung|Operation|Untersuchung|Hb|HbA1c|Na|Ca|Mg|Fe|Kreatinin|Creatinine|Glucose|Glukose|Ferritin|Vitamin|Cholesterol|Cholesterin|Troponin|Natrium|Kalium|Lipase|Albumin|Bilirubin|Mmol|Pro)(?![\p{L}\p{N}]))`;
+const NAME_WORD = String.raw`(?:\p{Lu}\p{Ll}[\p{L}'’\-]*\.?|\p{Lu}(?![\p{L}\p{N}]))(?![\p{L}\p{N}])`;
+const HOSP_NAME = String.raw`(?:(?:de|du|des|d'|d’|la|le|les|of|the|der|die|das|am|an|im|di|del|della|dello|dei|degli|St\.?|Ste)[ \t]+)*${NOT_A_NAME}${NAME_WORD}`;
 // Names after the word, also joined by "&" or "und": "Gemeinschaftspraxis Huber & Meier".
-const HOSPITAL_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}${HOSP_WORD}[ \t]+${HOSP_NAME}(?:(?:[ \t\-]+|[ \t]+(?:&|und|and|et)[ \t]+)${HOSP_NAME})*`, 'gu');
-// A name before the word: "Hirslanden Klinik Im Park", "Bethanien Spital". Not an article or an adjective ("Die Klinik",
-// "Psychiatrische Klinik").
-const HOSPITAL_BEFORE_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}(?!(?:Die|Der|Das|Den|Dem|Eine?|Einer|Im|In|Ins|Zur|Zum|Unsere?|Ihre?|Seine?|Diese[rs]?|La|Le|Les|Une?|Cette|Notre|Votre|The|A|An|This|That|Our|Your|His|Her|Their)\b)\p{Lu}[\p{L}'’\-]+(?<!isch|ische|ischen|ischer|ale|al|ique|ic|ical|ary|ive)[ \t]+(?:Klinik|Klinikum|Spital|Krankenhaus|Clinic|Hospital|Clinique|Hôpital|Praxis)(?:[ \t]+${HOSP_NAME}){0,3}${NOT_WORD_AFTER}`, 'gu');
-// Well-known hospital acronyms, as whole words ("CH" alone is not one).
-const HOSPITAL_ACRONYM_RE = /(?<![\p{L}\p{N}\-])(?:HUG|CHUV|USZ|USB|KSA|KSW|KSSG|LUKS|Inselspital|Insel|AP-HP|CHU|CHRU|Charité)(?![\p{L}\p{N}\-])/gu;
+const HOSPITAL_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}${HOSP_WORD}[ \t]+${HOSP_NAME}(?:(?:[ \t\-]+|[ \t]+(?:&|und|and|et|e)[ \t]+)${HOSP_NAME})*`, 'gu');
+// Clinic types are departments, not names: "Memory Clinic", "Reha Klinik", "Heart Failure Clinic" stay.
+const CLINIC_TYPES = new Set(('memory sleep pain anticoagulation diabetes heart failure reha rehab rehabilitation day tages schlaf schmerz gedachtnis '
+  + 'psychiatric psychiatrie fertility travel allergy eye dental walk-in walk outpatient private children childrens cardiac cancer '
+  + 'lipid hypertension obesity headache migraine epilepsy stroke wound vaccination vaccine sports sport hand foot spine back '
+  + 'university general memorial city county regional state').split(' '));
+// A name before the word: "Hirslanden Klinik Im Park", "Bethanien Spital". Not an article, an adjective or a clinic type.
+const HOSPITAL_BEFORE_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}(?!(?:Die|Der|Das|Den|Dem|Eine?|Einer|Im|In|Ins|Zur|Zum|Unsere?|Ihre?|Seine?|Diese[rs]?|La|Le|Les|Une?|Cette|Notre|Votre|The|A|An|This|That|Our|Your|His|Her|Their)\b)(\p{Lu}\p{Ll}[\p{L}'’\-]*)(?<!isch|ische|ischen|ischer|ale|al|ique|ic|ical|ary|ive)[ \t]+(?:Klinik|Klinikum|Spital|Krankenhaus|Clinic|Hospital|Clinique|Hôpital|Praxis|Ospedale|Clinica)(?:[ \t]+${HOSP_NAME}){0,3}${NOT_WORD_AFTER}`, 'gu');
+// Well-known hospital acronyms, as whole words ("CH", "USB" and "Insel" alone are not).
+const HOSPITAL_ACRONYM_RE = /(?<![\p{L}\p{N}\-])(?:HUG|CHUV|USZ|KSA|KSW|KSSG|LUKS|Inselspital|AP-HP|CHU|CHRU|Charité)(?![\p{L}\p{N}\-])/gu;
 const HOSPITAL_AFTER_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}(?:\p{Lu}[\p{L}'’\-]*[ \t]+){1,3}(?:General[ \t]+|Memorial[ \t]+|University[ \t]+|Children's[ \t]+)?(?:Hospital|Medical Center|Medical Centre|Infirmary|Clinic)${NOT_WORD_AFTER}`, 'gu');
 
 // Addresses: street number + street type, a street type + name, postcode + city, PO boxes.
@@ -312,9 +318,10 @@ export function makeRedactor({ profile = {}, words = [], correspondents = [], re
     t = t.replace(IBAN_RE, m => (m.replace(/ /g, '').length >= 15 ? '[iban]' : m));
     t = t.replace(ADDRESS_LABEL_RE, (m, label) => `${label} [address]`);
     t = t.replace(PHONE_LABEL_RE, (m, label) => (digits(m) >= 6 ? `${label}[phone]` : m));
-    t = t.replace(HOSPITAL_BEFORE_RE, () => hold('[hospital]')); // first: "Hirslanden Klinik Im Park" as one span
-    t = t.replace(HOSPITAL_RE, () => hold('[hospital]'));
-    t = t.replace(HOSPITAL_AFTER_RE, () => hold('[hospital]'));
+    const clinicType = words => words.split(/[ \t]+/).filter(Boolean).every(w => CLINIC_TYPES.has(foldName(w).replace(/'s$/, 's')));
+    t = t.replace(HOSPITAL_BEFORE_RE, (m, first) => (CLINIC_TYPES.has(foldName(first)) ? m : hold('[hospital]'))); // first: "Hirslanden Klinik Im Park"
+    t = t.replace(HOSPITAL_RE, m => hold('[hospital]'));
+    t = t.replace(HOSPITAL_AFTER_RE, m => (clinicType(m.replace(/(?:Hospital|Medical Cent(?:er|re)|Infirmary|Clinic)$/, '')) ? m : hold('[hospital]')));
     t = t.replace(HOSPITAL_ACRONYM_RE, () => hold('[hospital]'));
 
     // 3. Known names

@@ -417,3 +417,27 @@ test('institutions: -praxis names, a name before the word, hospital acronyms', (
     assert.equal(rr.text(s), s, s);
   }
 });
+
+test('institutions never swallow lab tests; clinic types stay; Italian institutions', () => {
+  const rr = makeRedactor({ relativeTo: '2026-10-15' });
+  // Lab tests and values after the institution word stay.
+  assert.equal(rr.text('Anticoagulation Clinic INR 2.5'), 'Anticoagulation Clinic INR 2.5');
+  assert.equal(rr.text('Memory Clinic MMSE 26/30'), 'Memory Clinic MMSE 26/30');
+  assert.equal(rr.text('Kantonsspital INR 2.5'), 'Kantonsspital INR 2.5');
+  assert.equal(rr.text('Klinik Hirslanden HbA1c 6.1 %'), '[hospital] HbA1c 6.1 %');
+  assert.equal(rr.text('Kantonsspital Aarau CRP 12 mg/L'), '[hospital] CRP 12 mg/L');
+  // Clinic types are departments, not names.
+  for (const s of ['Sleep Clinic', 'Pain Clinic', 'Heart Failure Clinic', 'Diabetes Clinic', 'Memory Clinic', 'Reha Klinik', 'Schlafklinik', 'Tagesklinik', 'Rehaklinik']) {
+    assert.equal(rr.text(s), s, s);
+  }
+  assert.equal(rr.text('Rehaklinik Bellikon'), '[hospital]');
+  assert.ok(!rr.text('Sleep Clinic of Dr. Smith').includes('Smith'));
+  // Ambiguous words are not acronyms.
+  for (const s of ['Insel', 'USB', 'USB-Stick']) assert.equal(rr.text(s), s, s);
+  assert.equal(rr.text('Inselspital'), '[hospital]');
+  // Italian institutions.
+  for (const s of ['Ospedale San Raffaele', 'Clinica Luganese', 'Ospedale Regionale di Lugano', 'Casa di cura Sant Anna', 'Istituto Oncologico']) {
+    assert.equal(rr.text(s), '[hospital]', s);
+  }
+  assert.equal(rr.text("l'ospedale per due giorni"), "l'ospedale per due giorni");
+});

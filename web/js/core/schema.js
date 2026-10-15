@@ -316,3 +316,45 @@ export const isBuiltInDocType = t => DOC_CATEGORIES.includes(t);
 
 /** The one-tap symptom chips, in the user's order. */
 export const symptomChips = () => current.symptoms;
+
+// ---------- Merge when two devices changed the catalog
+
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+/** Lists of names: keep my order, add what the other device added, drop what it removed. */
+function mergeNames(base, mine, theirs) {
+  if (same(mine, base)) return theirs;
+  if (same(theirs, base)) return mine;
+  const added = theirs.filter(x => !base.includes(x) && !mine.includes(x));
+  const removed = base.filter(x => !theirs.includes(x));
+  return [...mine.filter(x => !removed.includes(x)), ...added];
+}
+
+/** Items with ids: per item, the side that changed it wins; when both changed it, mine wins. */
+function mergeItems(base, mine, theirs) {
+  const byId = list => new Map(list.map(x => [x.id, x]));
+  const b = byId(base), m = byId(mine), t = byId(theirs);
+  const order = [...mine.map(x => x.id), ...theirs.map(x => x.id).filter(id => !m.has(id))];
+  const out = [];
+  for (const id of new Set([...order, ...b.keys()])) {
+    const bi = b.get(id), mi = m.get(id), ti = t.get(id);
+    const pick = same(mi, bi) ? ti : mi; // undefined = deleted on that side
+    if (pick) out.push(pick);
+  }
+  return out;
+}
+
+/** Three-way merge of catalogs: the version both devices started from, mine, and the newer one on the server. */
+export function mergeCatalog(base, mine, theirs) {
+  const [b, m, t] = [base, mine, theirs].map(normalizeCatalog);
+  return normalizeCatalog({
+    v: 1,
+    symptoms: mergeNames(b.symptoms, m.symptoms, t.symptoms),
+    docTypes: {
+      custom: mergeNames(b.docTypes.custom, m.docTypes.custom, t.docTypes.custom),
+      hidden: mergeNames(b.docTypes.hidden, m.docTypes.hidden, t.docTypes.hidden),
+    },
+    measurements: mergeItems(b.measurements, m.measurements, t.measurements),
+    counters: mergeItems(b.counters, m.counters, t.counters),
+  });
+}

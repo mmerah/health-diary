@@ -74,7 +74,18 @@ export class MockApi {
     this.persist();
     return { logVersion: this.db.logVersions[date] };
   }
-  async saveHealth(date, h) { this.db.health[date] = clone(h); this.persist(); }
+  async patchHealth(date, fields) {
+    const old = this.db.health[date] || { source: 'manual', edited: [] };
+    const next = { ...old, edited: [...(old.edited || [])] };
+    for (const [k, v] of Object.entries(fields)) {
+      if (v === null) { delete next[k]; next.edited = next.edited.filter(x => x !== k); continue; }
+      next[k] = clone(v);
+      if (!next.edited.includes(k)) next.edited.push(k);
+    }
+    this.db.health[date] = next;
+    this.persist();
+    return clone(next);
+  }
   async listDays(from, to) {
     const dates = new Set([...Object.keys(this.db.days), ...Object.keys(this.db.health)]);
     return [...dates].filter(d => (!from || d >= from) && (!to || d <= to)).sort()
@@ -103,8 +114,17 @@ export class MockApi {
   retryDocument = demoOnly;
   documentFileUrl() { return ''; }
 
-  async getCatalog() { return clone(this.db.catalog || null); }
-  async saveCatalog(c) { this.db.catalog = clone(c); this.persist(); return clone(c); }
+  async getCatalog() {
+    const c = clone(this.db.catalog || null);
+    if (c) Object.defineProperty(c, 'version', { value: this.db.catalogVersion || 0, enumerable: false, writable: true });
+    return c;
+  }
+  async saveCatalog(c) {
+    this.db.catalog = clone(c);
+    this.db.catalogVersion = (this.db.catalogVersion || 0) + 1;
+    this.persist();
+    return { catalog: clone(c), version: this.db.catalogVersion };
+  }
   async getSettings() { return clone(this.db.settings); }
   async saveSettings(s) {
     const { lastSync, ...rest } = s || {}; // lastSync is managed by the "server"

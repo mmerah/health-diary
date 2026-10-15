@@ -179,13 +179,9 @@ class Sleep(Part):
     inBedOnly: bool = False
 
 
-class Workout(Part):
-    type: Str(100) = "Workout"
-    minutes: MINUTES = 0
-    start: HHMM | None = None
-
-
-class DayHealth(Body):
+class HealthPatch(Body):
+    """Hand corrections of a day's health data: only the changed fields. A value sets the field;
+    null removes it (the next sync fills it again)."""
     sleep: Sleep | None = None
     steps: Annotated[int, Field(ge=0, le=200_000)] | None = None
     restingHr: Annotated[int, Field(ge=20, le=250)] | None = None
@@ -193,10 +189,6 @@ class DayHealth(Body):
     spo2: Annotated[float, Field(ge=50, le=100)] | None = None
     spo2Min: Annotated[int, Field(ge=50, le=100)] | None = None
     respiratoryRate: Annotated[float, Field(ge=4, le=60)] | None = None
-    workouts: Annotated[list[Workout], Field(max_length=50)] = []
-    source: Literal["apple", "manual"] = "manual"
-    syncedAt: Str(40) | None = None
-    edited: Annotated[list[Str(30)], Field(max_length=20)] = []
 
 
 # ---------- Measurements

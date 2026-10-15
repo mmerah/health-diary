@@ -380,3 +380,14 @@ export function healthExtras(h) {
   if (h.respiratoryRate != null) out.push({ key: 'respiratoryRate', label: 'Respiratory rate', text: `${one(h.respiratoryRate)} /min` });
   return out;
 }
+
+const HEALTH_FIELDS = ['sleep', 'steps', 'restingHr', 'hrv', 'spo2', 'spo2Min', 'respiratoryRate'];
+/** The fields a hand correction changed: { field: newValue }, null when a value was cleared. */
+export function healthPatch(before, after) {
+  const patch = {};
+  for (const k of HEALTH_FIELDS) {
+    const a = before ? before[k] ?? null : null, b = after[k] ?? null;
+    if (JSON.stringify(a) !== JSON.stringify(b)) patch[k] = b;
+  }
+  return patch;
+}

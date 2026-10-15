@@ -130,3 +130,20 @@ test('catalog: own items next to the built-in ones', async () => {
   assert.equal(S.drinkSummary(log.drinks), '2 water · 3 tea');
   S.setCatalog(null);
 });
+
+test('catalog: changes from two devices are merged', async () => {
+  const S = await import('../js/core/schema.js');
+  const m = (id, name, extra = {}) => ({ id, name, unit: '', min: 0, max: 10, step: 1, ...extra });
+  const base = { symptoms: ['Fatigue', 'Headache'], measurements: [m('c_aa', 'Pain'), m('c_bb', 'Glucose')], counters: [] };
+  const mine = { symptoms: ['Headache', 'Fatigue', 'Aura'], measurements: [m('c_aa', 'Back pain'), m('c_bb', 'Glucose')], counters: [] };
+  const theirs = { symptoms: ['Fatigue', 'Nausea'], measurements: [m('c_aa', 'Pain'), m('c_cc', 'SpO2')],
+    counters: [{ id: 'c_tea', name: 'Tea', one: 'cup', many: 'cups' }] };
+  const r = S.mergeCatalog(base, mine, theirs);
+  // They removed Headache and added Nausea; I moved Fatigue and added Aura.
+  assert.deepEqual(r.symptoms, ['Fatigue', 'Aura', 'Nausea']);
+  // c_aa: only I renamed it → mine. c_bb: they deleted it, I did not change it → deleted. c_cc: they added it.
+  assert.deepEqual(r.measurements.map(x => [x.id, x.name]), [['c_aa', 'Back pain'], ['c_cc', 'SpO2']]);
+  assert.deepEqual(r.counters.map(x => x.id), ['c_tea']);
+  // Nothing changed on my side → their version.
+  assert.deepEqual(S.mergeCatalog(base, base, theirs).symptoms, ['Fatigue', 'Nausea']);
+});

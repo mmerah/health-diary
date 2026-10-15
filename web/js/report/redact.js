@@ -132,8 +132,10 @@ const DOMAIN_RE = /(?<![\p{L}\p{N}@.\-])[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?(?:\.[a-
 const IBAN_RE = /(?<![\p{L}\p{N}])[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){2,7}(?:[ ]?[A-Z0-9]{1,3})?(?![\p{L}\p{N}])/gu;
 
 // Hospitals and clinics with their name: "CHU de Nantes", "Hôpital Saint-Louis", "Massachusetts General Hospital".
-const HOSP_WORD = String.raw`(?:CHU|CHR|CHRU|CH|Hôpital|Hopital|HÔPITAL|HOPITAL|Clinique|CLINIQUE|Centre\s+[Hh]ospitalier(?:\s+[Uu]niversitaire)?|CENTRE\s+HOSPITALIER|Hospital|HOSPITAL|Medical\s+Cent(?:er|re)|Klinik|Polyclinique|POLYCLINIQUE|Infirmary|Groupe\s+[Hh]ospitalier)`;
-const HOSP_NAME = String.raw`(?:(?:de|du|des|d'|d’|la|le|les|of|the|St\.?|Ste)[ \t]+)*\p{Lu}[\p{L}'’\-]*`;
+const HOSP_WORD = String.raw`(?:CHU|CHR|CHRU|CH|Hôpital|Hopital|HÔPITAL|HOPITAL|Clinique|CLINIQUE|Centre\s+[Hh]ospitalier(?:\s+[Uu]niversitaire)?|CENTRE\s+HOSPITALIER|Centre\s+m[ée]dical|Cabinet(?:\s+m[ée]dical)?|Hospital|HOSPITAL|Medical\s+Cent(?:er|re)|Klinikum|Klinik|Krankenhaus|Spital|Praxis|Polyclinique|POLYCLINIQUE|Infirmary|Groupe\s+[Hh]ospitalier|\p{Lu}\p{Ll}+(?:spital|klinikum|klinik|krankenhaus))`;
+// German nouns are capitalised: "im Spital Behandlung" is not a hospital name.
+const NOT_A_NAME = String.raw`(?!(?:Aufenthalt|Behandlung|Eintritt|Austritt|Aufnahme|Entlassung|Fieber|Schmerzen|Bericht|Besuch|Termin|Kontrolle|Notfall|Station|Abteilung|Operation|Untersuchung)\b)`;
+const HOSP_NAME = String.raw`(?:(?:de|du|des|d'|d’|la|le|les|of|the|der|die|das|am|an|im|St\.?|Ste)[ \t]+)*${NOT_A_NAME}\p{Lu}[\p{L}'’\-]*\.?`;
 const HOSPITAL_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}${HOSP_WORD}[ \t]+${HOSP_NAME}(?:[ \t\-]+${HOSP_NAME})*`, 'gu');
 const HOSPITAL_AFTER_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}(?:\p{Lu}[\p{L}'’\-]*[ \t]+){1,3}(?:General[ \t]+|Memorial[ \t]+|University[ \t]+|Children's[ \t]+)?(?:Hospital|Medical Center|Medical Centre|Infirmary|Clinic)${NOT_WORD_AFTER}`, 'gu');
 
@@ -146,13 +148,16 @@ const ADDRESS_STREET_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}(?:rue|Rue|RUE
 // German and Swiss streets: "Bahnhofstrasse 12", "Hauptstraße 5", "Lindenweg 3a". The ending must close the word,
 // and a house number must follow (not a unit: "Seeufer 3 km", "Monitoring 48 Stunden" stay).
 const STREET_DE_RE = /(?<![\p{L}\p{N}])\p{Lu}[\p{L}\-]*(?:strasse|straße|str\.|gasse|weg|platz|allee)[ \t]+\d{1,4}[a-zA-Z]?(?![\p{L}\p{N}]|[.,]\p{N}|[ \t]*(?:km|m|cm|mm|h|min|mg|g|kg|ml|mL|l|L|%|x|×|Std|Stunden|Tage|Mal)\b)/gu;
-// Swiss, Austrian and German 4-digit postcodes with the city, only in an address: with a country prefix
-// ("CH-8001 Zürich") or right after a street that was found ("Bahnhofstrasse 12, 8001 Zürich").
-// A year at the start of a line ("2019 Appendektomie") is never a postcode.
-const POSTCODE_4_RE = /(?:(?:CH|A|AT|D|DE|F)-\d{4}|(?<=\[address\],?[ \t]*)\d{4})[ \t]+\p{Lu}[\p{L}'’\-]+(?:[ \t]+(?:am|an|bei|im|sur|\p{Lu}[\p{L}'’\-]*))*(?=[ \t]*(?:$|[,;\n]))/gmu;
 const PO_BOX_RE = /(?<![\p{L}\p{N}])(?:P\.?[ \t]?O\.?[ \t]?Box|PO[ \t]?BOX|Bo[îi]te[ \t]+postale|B\.P\.|CS|TSA)[ \t]*\d+/gu;
-const POSTCODE_FR_RE = new RegExp(String.raw`(?<![\p{L}\p{N}.,])(?:F-|FR-|D-|DE-|A-|AT-|CH-)?\d{5}[ \t]+\p{Lu}[\p{L}'’\-]+(?:[ \t\-]+(?:CEDEX(?:[ \t]+\d{1,2})?|sur|sous|en|lès|les|de|du|la|le|\p{Lu}[\p{L}'’\-]*))*`, 'gu');
-const POSTCODE_UK_RE = /(?<![\p{L}\p{N}])[A-Z]{1,2}\d[A-Z\d]?[ \t]*\d[A-Z]{2}(?![\p{L}\p{N}])/gu;
+// A postcode (4 or 5 digits) with its city. It counts only in an address context (see postcodeOk below).
+const CITY = String.raw`\p{Lu}[\p{L}'’\-]+(?:[ \t\-]+(?:CEDEX(?:[ \t]+\d{1,2})?|Cedex(?:[ \t]+\d{1,2})?|sur|sous|en|lès|les|de|du|la|le|am|an|bei|im|\p{Lu}[\p{L}'’\-]*)){0,3}`;
+const POSTCODE_RE = new RegExp(String.raw`(?<![\p{L}\p{N}.,\-])((?:F|FR|D|DE|A|AT|CH)-)?(\d{4,5})[ \t]+(${CITY})`, 'gu');
+// Words after a number that make it a count, not a postcode.
+const NOT_A_CITY = new Set(('schritte steps step pas liter litre litres liters meter metre metres meters mètres kalorien calories kcal kj einheiten units unites unités '
+  + 'mal times fois tage days jours stunden hours heures minuten minutes euro euros chf eur usd franken patienten patients personen people '
+  + 'tabletten tablets comprimés gramm grams grammes ml mg ui iu').split(' '));
+// UK postcode, with the city just before it ("London NW1 6XE", "Leeds, LS1 4AP").
+const POSTCODE_UK_RE = /(?<![\p{L}\p{N}])(?:\p{Lu}[\p{L}'’\-]+,?[ \t]+)?[A-Z]{1,2}\d[A-Z\d]?[ \t]*\d[A-Z]{2}(?![\p{L}\p{N}])/gu;
 const ZIP_US_RE = /(?<![\p{L}\p{N}])(?:\p{Lu}[\p{L}.\-]*(?:[ \t]\p{Lu}[\p{L}.\-]*)*,[ \t]*)?[A-Z]{2}[ \t]+\d{5}(?:-\d{4})?(?![\p{N}])/gu;
 
 // IDs
@@ -174,6 +179,32 @@ const UNIT_AFTER = /^\s*(?:mmol|µmol|umol|mg|g\/|g\b|%|bpm|ms|kg|mmHg|\/|steps|
 const DIGITS_RE = /(?<![.,]\p{N}*)\d{7,}/gu;
 
 const digits = s => s.replace(/\D/g, '').length;
+
+// A line with an address or a name already found: a letterhead block.
+const ADDRESS_LINE = /\[address\]|\[name\]|\uE000|(?:^|[ \t])\d{1,4}[a-z]?,?[ \t]+\p{L}|\p{L}[ \t]+\d{1,4}[a-z]?(?:,|$)/u;
+
+/**
+ * Is "75002 Paris" / "1204 Genève" a postcode? Only with a country prefix, CEDEX, an address before it on the
+ * same line, or on a line of its own next to an address or name line. Never before a unit or a common noun
+ * ("10000 Schritte"), and a year (1900–2100) only after an address on the same line.
+ */
+function postcodeOk(str, at, m, prefix, code, city) {
+  if (NOT_A_CITY.has(fold(city.split(/[ \t\-]/)[0]))) return false;
+  if (prefix || /cedex/i.test(city)) return true;
+  const lineStart = str.lastIndexOf('\n', at - 1) + 1;
+  let lineEnd = str.indexOf('\n', at);
+  if (lineEnd < 0) lineEnd = str.length;
+  const before = str.slice(lineStart, at);
+  if (/\[address\],?[ \t]*$/.test(before)) return true;
+  const year = code.length === 4 && Number(code) >= 1900 && Number(code) <= 2100;
+  if (year) return false;
+  const alone = !before.trim() && !str.slice(at + m.length, lineEnd).trim();
+  if (!alone) return false;
+  const prev = str.slice(str.lastIndexOf('\n', lineStart - 2) + 1, Math.max(lineStart - 1, 0));
+  const nextEnd = str.indexOf('\n', lineEnd + 1);
+  const next = lineEnd < str.length ? str.slice(lineEnd + 1, nextEnd < 0 ? str.length : nextEnd) : '';
+  return (lineStart > 0 && ADDRESS_LINE.test(prev)) || ADDRESS_LINE.test(next);
+}
 
 /**
  * profile: { name, dob }       words: extra words to hide (settings.redactWords)
@@ -305,8 +336,7 @@ export function makeRedactor({ profile = {}, words = [], correspondents = [], re
     t = t.replace(ADDRESS_STREET_RE, '[address]');
     t = t.replace(STREET_DE_RE, '[address]');
     t = t.replace(PO_BOX_RE, '[address]');
-    t = t.replace(POSTCODE_4_RE, '[address]');
-    t = t.replace(POSTCODE_FR_RE, '[address]');
+    t = t.replace(POSTCODE_RE, (m, prefix, code, city, at, str) => (postcodeOk(str, at, m, prefix, code, city) ? '[address]' : m));
     t = t.replace(POSTCODE_UK_RE, '[address]');
     t = t.replace(AVS_RE, '[id]');
     t = t.replace(SPACED_ID_RE, (m, label) => `${label}[id]`);

@@ -53,10 +53,15 @@ def get(uid):
     return db.get_kv(uid, KEY, None)
 
 
-def save(uid, c: Catalog):
+def get_version(uid):
+    """(catalog or None, version). Version 0: never saved."""
+    return db.get_kv_version(uid, KEY, None)
+
+
+def save(uid, c: Catalog, base=None):
+    """Returns (catalog, new version). With `base`, raises db.Conflict if another device saved first."""
     value = normalize(c)
-    db.set_kv(uid, KEY, value)
-    return value
+    return value, db.set_kv(uid, KEY, value, base)
 
 
 def measurement(uid, mid):

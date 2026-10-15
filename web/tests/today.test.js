@@ -246,3 +246,11 @@ test('Apple Health oxygen and respiratory rate: text and hand correction', () =>
   assert.ok(M.correctHealth(old, { spo2: '120' }).error);
   assert.equal(M.correctHealth(old, { steps: '10' }).next.spo2, 97.1); // not in the form: kept
 });
+
+test('a hand correction sends only the changed fields', async () => {
+  const { healthPatch } = await import('../js/screens/today-model.js');
+  const before = { sleep: { total: 400 }, steps: 3000, restingHr: 58, hrv: 40, edited: [] };
+  const after = { sleep: { total: 420 }, steps: 3000, restingHr: 58, hrv: null, edited: ['sleep', 'hrv'] };
+  assert.deepEqual(healthPatch(before, after), { sleep: { total: 420 }, hrv: null });
+  assert.deepEqual(healthPatch(null, { steps: 10 }), { steps: 10 });
+});

@@ -175,7 +175,7 @@ def test_shortcut_ingest_keeps_hand_corrections(c, key):
     assert c.get("/api/auth/status").json()["user"]["ingestLastUsed"].endswith("Z")
 
     # Correct the steps by hand, then sync again: the correction stays.
-    assert c.put("/api/days/2026-10-14/health", json={**h, "steps": 5000, "edited": ["steps"]}).status_code == 204
+    assert c.patch("/api/days/2026-10-14/health", json={"steps": 5000}).status_code == 200
     h2 = ingest(c, {**p, "steps_days": "3000" + day}, key).json()["health"]
     assert h2["steps"] == 5000
     # The same weight twice is stored once.
@@ -279,7 +279,7 @@ def test_import_export_zip(c):
 
 
 def test_import_fills_only_empty_fields(c):
-    c.put("/api/days/2025-03-03/health", json={"steps": 123, "edited": ["steps"]})
+    c.patch("/api/days/2025-03-03/health", json={"steps": 123})
     xml = EXPORT.replace("2025-03-02", "2025-03-03").encode()
     r = c.post("/api/import/apple-health", files={"file": ("export.xml", xml, "text/xml")})
     assert r.status_code == 200
@@ -375,8 +375,8 @@ def test_oxygen_and_breathing_by_day(c, key):
     y = c.get("/api/days/2026-10-22").json()["health"]
     assert (y["spo2"], y["spo2Min"]) == (95.0, 93) and "respiratoryRate" not in y
     # Hand corrections of these fields are accepted and checked.
-    assert c.put("/api/days/2026-10-22/health", json={"spo2": 95.5, "spo2Min": 90, "respiratoryRate": 13.5}).status_code == 204
-    assert c.put("/api/days/2026-10-22/health", json={"spo2": 101}).status_code == 400
+    assert c.patch("/api/days/2026-10-22/health", json={"spo2": 95.5, "spo2Min": 90, "respiratoryRate": 13.5}).status_code == 200
+    assert c.patch("/api/days/2026-10-22/health", json={"spo2": 101}).status_code == 400
 
 
 def test_oxygen_and_breathing_from_the_export(c):

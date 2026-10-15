@@ -492,14 +492,22 @@ def put_settings(changes: models.Settings, user=User):
 # ---------- The user's own catalog
 
 @app.get("/api/catalog")
-def get_catalog(user=User):
-    """The user's own symptoms, document types, measurements and counters, or null (defaults)."""
-    return catalog.get(user["id"])
+def get_catalog(response: Response, user=User):
+    """The user's own symptoms, document types, measurements and counters, or null (defaults).
+    X-Version: the version to send back as X-Base-Version (like the profile)."""
+    value, version = catalog.get_version(user["id"])
+    response.headers["X-Version"] = str(version)
+    return value
 
 
 @app.put("/api/catalog")
-def put_catalog(body: models.Catalog, user=User):
-    return catalog.save(user["id"], body)
+def put_catalog(body: models.Catalog, base=BaseVersion, user=User):
+    try:
+        value, version = catalog.save(user["id"], body, base)
+    except db.Conflict as e:
+        return JSONResponse({"detail": "Your lists were changed on another device.", "catalog": e.value,
+                             "version": e.version}, status_code=409)
+    return {"catalog": value, "version": version}
 
 
 # ---------- Days
@@ -524,9 +532,27 @@ def put_log(date: str, log_: models.DayLog, base=BaseVersion, user=User):
     return {"logVersion": version}
 
 
-@app.put("/api/days/{date}/health", status_code=204)
-def put_health(date: str, data: models.DayHealth, user=User):
-    db.save_day_part(user["id"], check_date(date), "health", data.model_dump(exclude_unset=True))
+@app.patch("/api/days/{date}/health")
+def patch_health(date: str, body: models.HealthPatch, user=User):
+    """Hand corrections. A field set here is listed in "edited": a sync or an import never changes
+    it. null removes the field and the mark, so the next sync fills it again. Merged into what is
+    stored now, in one transaction: a sync that came in meanwhile is kept."""
+    with db.transaction():
+        health = dict(db.get_day(user["id"], check_date(date))["health"] or {})
+        edited = list(health.get("edited") or [])
+        for key in (k for k in models.HealthPatch.model_fields if k in body.model_fields_set):  # fixed order
+            value = getattr(body, key)
+            if value is None:
+                health.pop(key, None)
+                edited = [k for k in edited if k != key]
+            else:
+                health[key] = value.model_dump() if hasattr(value, "model_dump") else value
+                if key not in edited:
+                    edited.append(key)
+        health["edited"] = edited
+        health.setdefault("source", "manual")  # stays "apple" when the day came from Apple Health
+        db.save_day_part(user["id"], date, "health", health)
+    return health
 
 
 # ---------- Measurements

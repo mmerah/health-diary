@@ -116,11 +116,11 @@ def test_log_versions(c):
     assert c.put("/api/days/2026-10-09/log", json={"notes": "old client"}).json() == {"logVersion": 3}
     assert c.put("/api/days/2026-10-09/log", json={}, headers={"X-Base-Version": "x"}).status_code == 400
     # Health data does not change the log version.
-    c.put("/api/days/2026-10-09/health", json={"steps": 10})
+    c.patch("/api/days/2026-10-09/health", json={"steps": 10})
     day = c.get("/api/days/2026-10-09").json()
     assert day["logVersion"] == 3 and day["health"]["steps"] == 10
     assert [d["logVersion"] for d in c.get("/api/days?from=2026-10-09&to=2026-10-09").json()] == [3]
-    c.put("/api/days/2026-10-10/health", json={"steps": 10})
+    c.patch("/api/days/2026-10-10/health", json={"steps": 10})
     assert c.get("/api/days/2026-10-10").json()["logVersion"] == 0
 
 
@@ -151,16 +151,47 @@ def test_day_log_validation(c):
         assert c.put("/api/days/2026-10-01/log", json=body).status_code == 400, body
 
 
-def test_day_health_validation(c):
-    good = {"sleep": {"total": 400, "deep": 60, "rem": 80, "core": 260, "awake": 5, "bed": "23:00", "wake": "06:45",
-                      "naps": [{"start": "14:00", "end": "14:30", "minutes": 30}], "inBedOnly": False},
-            "steps": 8000, "restingHr": 60, "hrv": 40, "workouts": [{"type": "Walk", "minutes": 30, "start": None}],
-            "source": "manual", "syncedAt": None, "edited": ["steps"]}
-    assert c.put("/api/days/2026-10-05/health", json=good).status_code == 204
-    assert c.get("/api/days/2026-10-05").json()["health"] == good
-    for bad in ({"steps": -1}, {"restingHr": 400}, {"sleep": {"total": 2000}}, {"source": "fitbit"},
-                {"sleep": {"bed": "25:00"}}, {"extra": True}):
-        assert c.put("/api/days/2026-10-05/health", json=bad).status_code == 400, bad
+def test_health_hand_corrections(c):
+    uid = c.get("/api/auth/status").json()["user"]["id"]
+    # A synced day.
+    db.save_day_part(uid, "2026-10-05", "health", {"steps": 8000, "hrv": 40, "source": "apple", "edited": [],
+                                                   "syncedAt": "2026-10-05T21:00"})
+    sleep = {"total": 400, "deep": 60, "rem": 80, "core": 260, "awake": 5, "bed": "23:00", "wake": "06:45",
+             "naps": [{"start": "14:00", "end": "14:30", "minutes": 30}], "inBedOnly": False}
+    r = c.patch("/api/days/2026-10-05/health", json={"steps": 9000, "sleep": sleep})
+    assert r.status_code == 200
+    h = r.json()
+    assert h["steps"] == 9000 and h["sleep"] == sleep and h["hrv"] == 40
+    assert h["edited"] == ["sleep", "steps"]
+    assert h["source"] == "apple" and h["syncedAt"] == "2026-10-05T21:00"
+    assert c.get("/api/days/2026-10-05").json()["health"] == h
+
+    # A sync in between is kept: PATCH merges into what is stored now.
+    db.save_day_part(uid, "2026-10-05", "health", {**h, "restingHr": 55})
+    h = c.patch("/api/days/2026-10-05/health", json={"hrv": 42}).json()
+    assert h["restingHr"] == 55 and h["hrv"] == 42 and sorted(h["edited"]) == ["hrv", "sleep", "steps"]
+
+    # null removes the field and the mark: the next sync fills it again.
+    h = c.patch("/api/days/2026-10-05/health", json={"steps": None}).json()
+    assert "steps" not in h and sorted(h["edited"]) == ["hrv", "sleep"]
+    from app import health as health_module
+    merged = health_module.merge_health(uid, "2026-10-05", {"steps": 7777, "hrv": 1})
+    assert merged["steps"] == 7777 and merged["hrv"] == 42  # hrv is still a hand correction
+
+    # A day without health data becomes "manual".
+    assert c.patch("/api/days/2026-10-06/health", json={"spo2": 95.5}).json() == {
+        "spo2": 95.5, "edited": ["spo2"], "source": "manual"}
+
+    for bad in ({"steps": -1}, {"restingHr": 400}, {"sleep": {"total": 2000}}, {"spo2": 101},
+                {"sleep": {"bed": "25:00"}}, {"source": "manual"}, {"edited": []}, {"workouts": []}):
+        assert c.patch("/api/days/2026-10-05/health", json=bad).status_code == 400, bad
+    assert c.put("/api/days/2026-10-05/health", json={"steps": 1}).status_code == 405
+
+    # Another user patches their own day, never this one.
+    c.post("/api/users", json={"username": "kim", "password": PW})
+    kim = login("kim")
+    assert kim.patch("/api/days/2026-10-05/health", json={"steps": 1}).json()["steps"] == 1
+    assert c.get("/api/days/2026-10-05").json()["health"].get("steps") == 7777
 
 
 def test_measurements(c):
@@ -360,10 +391,11 @@ CATALOG = {
 
 
 def test_catalog_is_normalized_like_the_app(c):
-    assert c.get("/api/catalog").json() is None
+    r = c.get("/api/catalog")
+    assert r.json() is None and r.headers["x-version"] == "0"
     r = c.put("/api/catalog", json=CATALOG)
-    assert r.status_code == 200
-    cat = r.json()
+    assert r.status_code == 200 and r.json()["version"] == 1
+    cat = r.json()["catalog"]
     assert cat["symptoms"] == ["Headache", "Brain fog"]
     assert cat["docTypes"] == {"custom": ["Dentist", "Eye exam"], "hidden": ["Imaging"]}
     assert [m["id"] for m in cat["measurements"]] == ["c_glucose", "c_pain"]
@@ -506,3 +538,44 @@ def test_a_newer_version_still_in_the_wal_file_is_refused(tmp_path, monkeypatch)
             db.init()
     finally:
         writer.close()
+
+
+def test_catalog_versions(c):
+    v = int(c.get("/api/catalog").headers["x-version"])
+    lists = {"counters": [{"id": "c_tea", "name": "Tea"}]}
+    r = c.put("/api/catalog", json=lists, headers={"X-Base-Version": str(v)})
+    assert r.status_code == 200 and r.json()["version"] == v + 1
+    stored = r.json()["catalog"]
+    # A second device saves from the old version: refused, with what is stored now.
+    r = c.put("/api/catalog", json={"counters": []}, headers={"X-Base-Version": str(v)})
+    assert r.status_code == 409
+    assert r.json() == {"detail": "Your lists were changed on another device.", "catalog": stored, "version": v + 1}
+    assert c.get("/api/catalog").headers["x-version"] == str(v + 1)
+    assert c.put("/api/catalog", json={}, headers={"X-Base-Version": "x"}).status_code == 400
+    # Without the header, a save is not checked.
+    assert c.put("/api/catalog", json=lists).json()["version"] == v + 2
+
+
+def test_catalog_conflict_on_a_first_save(c):
+    c.post("/api/users", json={"username": "lea", "password": PW})
+    lea = login("lea")
+    assert lea.put("/api/catalog", json={}, headers={"X-Base-Version": "0"}).json()["version"] == 1
+    r = lea.put("/api/catalog", json={}, headers={"X-Base-Version": "0"})
+    assert r.status_code == 409 and r.json()["version"] == 1 and r.json()["catalog"]["v"] == 1
+
+
+def test_a_0_2_0_database_keeps_working(tmp_path, monkeypatch):
+    """0.2.0 (user_version 5) already has kv.version: catalog versions need no migration."""
+    for name, value in (("DATA_DIR", tmp_path), ("DB_PATH", tmp_path / "diary.db"), ("TMP_DIR", tmp_path / "tmp")):
+        monkeypatch.setattr(db, name, value)
+    con = sqlite3.connect(tmp_path / "diary.db")
+    for statement in db.SCHEMA:  # the 0.2.0 schema, as a 0.2.0 install made it
+        con.execute(statement)
+    con.execute("INSERT INTO users (username, password_hash) VALUES ('old', 'x')")
+    con.execute("""INSERT INTO kv (user_id, key, value) VALUES (1, 'catalog', '{"v": 1, "counters": []}')""")
+    con.execute("PRAGMA user_version = 5")
+    con.commit()
+    con.close()
+    db.init()
+    from app import catalog
+    assert catalog.get_version(1) == ({"v": 1, "counters": []}, 1)

@@ -70,7 +70,7 @@ const DAY = String.raw`(\d{1,2})(?:st|nd|rd|th|er|re|e)?`;
 const OF = String.raw`(?:\s+of)?`;
 const TO = String.raw`\s*(?:au|à|to|until|till|-|–|—|and|et)\s*`;
 // Words that show that a day/month pair without a year is a date ("le 3/10"), not a score ("pain 3/10").
-const DATE_CUE = /\b(?:le|du|au|on|from|to|until|since|depuis|jusqu'au|dated?|the|between|and|et|entre)\s*$/i;
+const DATE_CUE = /\b(?:le|du|au|on|from|to|until|since|depuis|jusqu'au|dated?|the|between|and|et|entre|am|vom|bis|ab|seit|zum)\s*$/i;
 
 const PATTERNS = [
   // Year first: 2026-03-14, 2026/03/14, 2026.03.14

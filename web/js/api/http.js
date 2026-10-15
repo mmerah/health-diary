@@ -80,7 +80,10 @@ export class HttpApi {
   saveLog(date, log, baseVersion) {
     return this.req(`/days/${date}/log`, { method: 'PUT', body: log, headers: baseVersion != null ? { 'X-Base-Version': String(baseVersion) } : {} });
   }
-  saveHealth(date, h) { return this.req(`/days/${date}/health`, { method: 'PUT', body: h }); }
+  /** Hand corrections: send only the changed fields (and null to remove one). The server merges them into
+      the newest health data of the day and marks them as corrected, so a sync in between is never lost.
+      Returns the merged health object. */
+  patchHealth(date, fields) { return this.req(`/days/${date}/health`, { method: 'PATCH', body: fields }); }
   listDays(from, to) { return this.req(`/days?${new URLSearchParams({ from: from || '', to: to || '' })}`); }
   listMeasurements(type, from, to) {
     return this.req(`/measurements?${new URLSearchParams({ type: type || '', from: from || '', to: to || '' })}`);
@@ -111,8 +114,18 @@ export class HttpApi {
   /** Address of the original file (PDF or image), to open in a new tab. */
   documentFileUrl(id) { return `${this.base}/documents/${encodeURIComponent(id)}/file`; }
   /** The user's own symptoms, document types, measurements and counters (see core/schema.js). */
-  getCatalog() { return this.req('/catalog'); }
-  saveCatalog(c) { return this.req('/catalog', { method: 'PUT', body: c }); }
+  // Versioned like the profile: getCatalog() returns the catalog (or null) with a non-enumerable
+  // `version`; saveCatalog(c, baseVersion) returns { catalog, version } or throws 409 with err.data = { catalog, version }.
+  async getCatalog() {
+    const res = await this.req('/catalog', { raw: true });
+    const c = await res.json();
+    const version = Number(res.headers.get('x-version')) || 0;
+    if (c) Object.defineProperty(c, 'version', { value: version, enumerable: false, writable: true });
+    return c;
+  }
+  saveCatalog(c, baseVersion) {
+    return this.req('/catalog', { method: 'PUT', body: c, headers: baseVersion != null ? { 'X-Base-Version': String(baseVersion) } : {} });
+  }
   getSettings() { return this.req('/settings'); }
   saveSettings(s) { return this.req('/settings', { method: 'PUT', body: s }); }
   importAppleHealth(file) {

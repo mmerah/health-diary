@@ -135,7 +135,7 @@ test('header values: the name is removed', () => {
 
 test('addresses', () => {
   for (const s of ['12 rue de la Paix', '3 bis avenue Jean Jaurès', '221B Baker Street', '10 Downing Street', '1600 Pennsylvania Ave',
-    '75002 Paris', '69003 LYON CEDEX 03', 'London NW1 6XE', 'Springfield, IL 62704', 'Adresse : chez Mme X, bâtiment B']) {
+    'F-75002 Paris', '69003 LYON CEDEX 03', 'London NW1 6XE', 'Springfield, IL 62704', 'Adresse : chez Mme X, bâtiment B']) {
     const out = R(s);
     assert.match(out, /\[address\]|\[name\]/, `${s} → ${out}`);
     assert.ok(!/\d{3,}/.test(out.replace(/\[\w+\]/g, '')), `${s} → ${out}`);
@@ -319,7 +319,7 @@ test('Swiss and German details', () => {
   const T2 = s => rr.text(s);
   assert.equal(T2('AHV-Nr. 756.1234.5678.97'), 'AHV-Nr. [id]');
   assert.equal(T2('756 1234 5678 97'), '[id]');
-  for (const s of ['CH-1204 Genève', 'CH-8001 Zürich', 'A-1010 Wien', 'D-10115 Berlin', '10115 Berlin', 'Bahnhofstrasse 12', 'Hauptstraße 5', 'Kaiserweg 4b', 'Rue du Rhône 42']) {
+  for (const s of ['CH-1204 Genève', 'CH-8001 Zürich', 'A-1010 Wien', 'D-10115 Berlin', 'Bahnhofstrasse 12', 'Hauptstraße 5', 'Kaiserweg 4b', 'Rue du Rhône 42']) {
     assert.equal(T2(s), '[address]', s);
   }
   assert.equal(T2('Rue du Rhône 42, 1204 Genève'), '[address], [address]');
@@ -342,4 +342,42 @@ test('years, medical words and units are not addresses', () => {
     assert.equal(rr.text(s), s, JSON.stringify(s));
   }
   assert.equal(rr.text('Surgeries: 2019 Appendektomie; 2021 Knie-OP'), 'Surgeries: 2019 Appendektomie; 2021 Knie-OP');
+});
+
+// ---------- v0.2.1: postcodes need an address context, hospital names, cities with postcodes
+
+test('postcodes: only in an address context, never counts', () => {
+  const rr = makeRedactor({ relativeTo: '2026-10-15' });
+  const T3 = s => rr.text(s);
+  // Counts stay.
+  for (const s of ['10000 Schritte heute, 12500 Steps', '12000 pas', '25000 Einheiten', '2500 kcal', '75002 Paris', '1204 Genève',
+    'Gewicht 72000 Gramm', '2019 Appendektomie\n2021 Knie-OP']) assert.equal(T3(s), s, JSON.stringify(s));
+  // Postcodes with an address context go, with the city.
+  assert.equal(T3('12 rue de la Paix, 75002 Paris'), '[address], [address]');
+  assert.equal(T3('12 rue de la Paix\n75002 Paris'), '[address]\n[address]', 'letterhead: the line before is a street');
+  assert.equal(T3('Dr. Martin\n75002 Paris'), 'Dr. [name]\n[address]', 'letterhead: the line before is a name');
+  assert.equal(T3('F-75002 Paris'), '[address]');
+  assert.equal(T3('69003 LYON CEDEX 03'), '[address]');
+  assert.equal(T3('Rue du Rhône 42\n1204 Genève'), '[address]\n[address]');
+  assert.equal(T3('Hauptstraße 5, 10115 Berlin'), '[address], [address]');
+});
+
+test('hospital and practice names', () => {
+  const rr = makeRedactor({ relativeTo: '2026-10-15' });
+  for (const s of ['Kantonsspital Aarau', 'Universitätsspital Zürich', 'Stadtspital Triemli', 'Klinik Hirslanden', 'Klinikum Rechts der Isar',
+    'Krankenhaus Nord', 'Hôpital Cochin', 'Clinique de la Source', 'Praxis Dr. Meier', 'Cabinet médical du Lac', 'Medical Center X']) {
+    assert.equal(rr.text(s), '[hospital]', s);
+  }
+  assert.equal(rr.text('Eintritt ins Kantonsspital Aarau am 3/10', { ref: '2026-10-14' }), 'Eintritt ins [hospital] am D-12');
+  // Medical words that only contain the stems stay.
+  for (const s of ['Spitalaufenthalt 3 Tage', 'Klinikaufenthalt', 'hospitalisation en 2019', 'im Spital wegen Pneumonie', 'ins Krankenhaus gebracht',
+    'im Spital Behandlung mit Antibiotika', 'Hospital stays: none']) assert.equal(rr.text(s), s, s);
+});
+
+test('a city next to a postcode is hidden with it', () => {
+  const rr = makeRedactor({ relativeTo: '2026-10-15' });
+  assert.equal(rr.text('221B Baker Street, London NW1 6XE'), '[address], [address]');
+  assert.equal(rr.text('Leeds, LS1 4AP'), '[address]');
+  assert.equal(rr.text('Bahnhofstrasse 12, 8001 Zürich'), '[address], [address]');
+  assert.ok(!rr.text('10 Downing Street, London SW1A 2AA').includes('London'));
 });

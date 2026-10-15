@@ -9,7 +9,7 @@ import { session } from '../core/session.js';
 import { store, toast } from '../core/ui.js';
 import {
   changedSections, clampDate, correctHealth, defaultOpen, mergeLog, newSymptom, saveMerging, stepDrink,
-  symptomChipList, weekDays,
+  symptomChipList, weekDays, healthPatch,
 } from './today-model.js';
 import { bodyOf, chipsHtml, emptyOf, healthSection, page, summaryOf, symptomItem, weekStrip } from './today-view.js';
 
@@ -618,9 +618,11 @@ const forms = {
     const res = correctHealth(fresh, values);
     if (res.error) { err.textContent = res.error; return; }
     err.textContent = '';
-    await api.saveHealth(date, res.next);
+    // Send only what changed. The server merges it into the newest data, so a sync in between is kept.
+    const patch = healthPatch(fresh, res.next);
+    const merged = Object.keys(patch).length ? await api.patchHealth(date, patch) : fresh;
     if (st.date !== date || !isLive(st)) return;
-    st.health = res.next;
+    st.health = merged;
     st.healthForm = false;
     redrawHealth('[data-act="health-edit"]');
     flash(st.root.querySelector('.tsec-health'));

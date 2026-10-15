@@ -8,7 +8,7 @@
 import { api } from './api/index.js';
 import { flushAll, resumeAll } from './core/autosave.js';
 import { esc } from './core/format.js';
-import { setCatalog } from './core/schema.js';
+import { getCatalog, mergeCatalog, setCatalog } from './core/schema.js';
 import { session } from './core/session.js';
 import { clearLocalData, closeSheet, ICON, setSaveState, store, toast } from './core/ui.js';
 import auth from './screens/auth.js';
@@ -21,6 +21,8 @@ import today from './screens/today.js';
 const SCREENS = { today, body, records, report, profile };
 const TABS = Object.keys(SCREENS);
 const view = document.getElementById('view');
+
+let catalogVersion = 0; // version of the user's catalog on the server (see saveCatalog)
 
 const ctx = {
   api,
@@ -37,10 +39,21 @@ const ctx = {
   quickAdd: preset => import('./screens/quickadd.js').then(m => m.openQuickAdd(ctx, preset)),
   logout,
   onLogin,
-  /** Saves the user's own symptoms, types, measurements and counters, and uses them at once. */
+  /** Saves the user's own symptoms, types, measurements and counters, and uses them at once.
+      When another device saved in between, both changes are merged (my change wins on the same item). */
   async saveCatalog(catalog) {
-    const saved = await api.saveCatalog(catalog);
-    setCatalog(saved || catalog);
+    const base = getCatalog();
+    let res;
+    try {
+      res = await api.saveCatalog(catalog, catalogVersion);
+    } catch (e) {
+      if (e.status !== 409 || !e.data) throw e;
+      const merged = mergeCatalog(base, catalog, e.data.catalog);
+      res = await api.saveCatalog(merged, e.data.version);
+      toast('Merged with changes from another device.');
+    }
+    catalogVersion = res.version;
+    setCatalog(res.catalog);
   },
 };
 
@@ -201,7 +214,9 @@ async function onLogin(user) {
   ctx.user = user;
   session.set(user);
   // The user's own items. Without them the app still works with the built-in ones.
-  setCatalog(await api.getCatalog().catch(() => null));
+  const catalog = await api.getCatalog().catch(() => null);
+  catalogVersion = catalog ? catalog.version || 0 : 0;
+  setCatalog(catalog);
   resumeAll(); // edits this user made earlier on this device and that were not saved yet
   document.body.classList.remove('is-auth');
   const r = routeOf(location.hash);

@@ -4,14 +4,19 @@ All data is in the `data` folder: the database `diary.db`, the documents and the
 
 ## Back up
 
-1. Make a safe copy of the database while the app runs:
+1. Make a safe copy of the database while the app runs. Run the command as the owner of `data`:
 
    ```sh
-   docker exec health-diary python -c "import sqlite3; sqlite3.connect('/data/diary.db').backup(sqlite3.connect('/data/backup.db'))"
+   docker exec --user "$(id -u):$(id -g)" health-diary python -c "import sqlite3; sqlite3.connect('/data/diary.db').backup(sqlite3.connect('/data/backup.db'))"
    ```
 
-2. Copy the `data` folder to your backup place. Include `backup.db` and `documents/`.
-3. Keep the secret key apart from the backup: `DIARY_SECRET_KEY` from `.env`, or `data/secret.key`.
+2. Copy the `data` folder to your backup place, but not the key file:
+
+   ```sh
+   rsync -a --exclude secret.key data/ /path/to/backup/health-diary/
+   ```
+
+3. Keep the secret key in another place: `DIARY_SECRET_KEY` from `.env`, or `data/secret.key`.
 
 > **Caution:** without the key, the uploaded documents cannot be read again.
 > With the key next to the backup, anyone with the backup can read them.
@@ -19,7 +24,8 @@ All data is in the `data` folder: the database `diary.db`, the documents and the
 ## Restore
 
 1. Stop the app: `docker compose down`.
-2. Put the `data` folder back. Rename `backup.db` to `diary.db`.
+2. Put the `data` folder back. Delete `diary.db`, `diary.db-wal` and `diary.db-shm`.
+   Rename `backup.db` to `diary.db`.
 3. Put the same `DIARY_SECRET_KEY` in `.env`, or put `secret.key` back in `data`.
 4. Start the app: `docker compose up -d`.
 

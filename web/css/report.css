@@ -41,7 +41,7 @@
 .rp-bar { padding: 8px; gap: 6px; }
 .rp-bar .btn { flex: 1 1 auto; font-size: 0.875rem; padding-inline: 10px; }
 .rp.is-ai .rp-bar .btn.primary { flex: 1 1 60%; }
-.rp-tokens { font-family: var(--font-data); font-size: 0.85rem; color: var(--muted); white-space: nowrap; padding-inline: 4px; }
+.rp-tokens { font-family: var(--font-data); font-size: 0.85rem; color: var(--ink); white-space: nowrap; padding-inline: 4px; }
 
 /* ---------- AI text preview */
 .rp-md-wrap { position: relative; border-radius: var(--r); background: var(--surface); box-shadow: var(--shadow); }

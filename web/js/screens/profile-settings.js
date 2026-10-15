@@ -221,7 +221,7 @@ function accountCard(ctx) {
   const who = `<p>Logged in as <strong>${esc(user.username)}</strong>${user.isAdmin ? ' <span class="pill info">Administrator</span>' : ''}</p>`;
   const exportBlock = `<div class="stack">
       <h3>Export my data</h3>
-      <p class="hint">Download your whole diary as one JSON file. It contains health data: keep it in a safe place.</p>
+      <p class="hint">Download your whole diary as one ZIP file: your data and your original documents. The file is not encrypted. It contains health data: keep it in a safe place.</p>
       <div class="btn-row"><button type="button" class="btn" data-act="export">${ICON.download}Export my data</button></div>
     </div>`;
   if (!api.can.accounts) {

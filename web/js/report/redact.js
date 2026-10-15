@@ -104,8 +104,11 @@ const GLUED = String.raw`(?:[dDlL]['’])`;
 const NAME = String.raw`(?:${PART}[ \t]+){0,2}${GLUED}?${TOK}(?:(?:[ \t]+(?:${PART}[ \t]+){0,2}|[ \t]*${GLUED}|[ \t]+${GLUED})${TOK}){0,3}`;
 
 const TITLES = ['Professeur', 'Professor', 'Docteur', 'Doctor', 'Monsieur', 'Madame', 'Mademoiselle', 'Mlle', 'Mme', 'Mrs', 'Mr', 'Ms', 'Miss', 'Prof', 'Dr', 'Pr', 'Drs'];
-const TITLE_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}(${[...TITLES, ...['DOCTEUR', 'DOCTOR', 'PROFESSEUR', 'PROFESSOR', 'MONSIEUR', 'MADAME', 'MME', 'MLLE', 'MRS', 'MR', 'DR'],
-  ].sort((a, b) => b.length - a.length).join('|')}|M)(\.?)[ \t]+(${NAME})`, 'gu');
+const TITLE_WORDS = [...TITLES, ...['DOCTEUR', 'DOCTOR', 'PROFESSEUR', 'PROFESSOR', 'MONSIEUR', 'MADAME', 'MME', 'MLLE', 'MRS', 'MR', 'DR', 'Herr', 'Frau']]
+  .sort((a, b) => b.length - a.length).join('|');
+// German and Swiss degrees after a title: "Dr. med.", "Dr. med. dent.", "Prof. Dr. med.", "Dr. rer. nat.".
+const DEGREE = String.raw`(?:med|dent|vet|phil|rer|nat|pharm|habil|univ|h\.c|sc|jur|oec|biol|chem|psych)\.?`;
+const TITLE_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}(${TITLE_WORDS}|M)(\.?)((?:[ \t]+(?:${TITLE_WORDS})\.?|[ \t]+${DEGREE})*)[ \t]+(${NAME})`, 'gu');
 
 // Words after which a name follows, with or without a colon: "Signé par : Marie Lefebvre", "Re: John Smith".
 const CUES = String.raw`(?:(?:[Vv]alidated|[Ss]igned|[Ww]ritten|[Rr]eported|[Pp]rescribed|[Rr]eferred|[Ss]een|[Ee]xamined|[Rr]equested|[Dd]ictated|[Rr]eviewed|[Aa]pproved|[Ii]nterpreted|[Rr]ead|[Cc]opy\s+to)\s+by|(?:[Vv]alidé|[Ss]igné|[Rr]édigé|[Pp]rescrit|[Dd]emandé|[Aa]dressé|[Ii]nterprété|[Vv]u|[Ee]xaminé|[Cc]opie\s+à)e?s?(?:\s+électroniquement)?\s+par|Signed|SIGNED|Signé|Re|RE|Pt|Patient|Dear|Cher|Chère|Attn|Cc|To|From|De|À|Pour|Médecin(?:\s+traitant)?|Doctor|GP|Physician|Prescripteur|Biologiste|Interne|Externe|Infirmi[eè]re?|Nurse|Resident|épouse|[ÉEée]p\.|née|nee|born|NÉE)`;
@@ -115,7 +118,7 @@ const CREDENTIAL_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}(${TOK}(?:[ \t]+(?
 const NAME_LINE_RE = new RegExp(String.raw`^([ \t]*)(${TOK}(?:[ \t]+(?:${PART}[ \t]+){0,2}${TOK}){1,3})([ \t]*)$`, 'gmu');
 
 // Header labels: the name tokens after them are hidden (not the rest of the line: "Patient: 35 y/o male …" stays).
-const HEADER_NAME_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}((?:Patient(?:e)?(?:\s+name)?|PATIENT|Nom(?:\s+de\s+naissance|\s+d'usage|\s+et\s+prénom|\s+de\s+jeune\s+fille)?|NOM|Prénom|PRENOM|PRÉNOM|Name|NAME|Full\s+name|Surname|First\s+name|Last\s+name|Given\s+name|Assuré(?:e)?|Insured|Bénéficiaire)[ \t]*:[ \t]*)(${NAME})`, 'gu');
+const HEADER_NAME_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}((?:Patient(?:e)?(?:\s+name)?|PATIENT|Nom(?:\s+de\s+naissance|\s+d'usage|\s+et\s+prénom|\s+de\s+jeune\s+fille)?|NOM|Prénom|PRENOM|PRÉNOM|Name|NAME|Full\s+name|Surname|First\s+name|Last\s+name|Given\s+name|Assuré(?:e)?|Insured|Bénéficiaire)[ \t]*:[ \t]*)(${NAME}(?:[ \t]*,[ \t]*${NAME}(?=[ \t]*(?:$|[,;(\n–-]|\uE000)))?)`, 'gmu');
 const ADDRESS_LABEL_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}((?:Adresse|ADRESSE|Address|ADDRESS|Domicile)[ \t]*:)[^\n]*`, 'gu');
 const BIRTH_LABEL = String.raw`(?:born|Born|BORN|n[ée]e?(?:\(e\))?\s+le|N[ée]e?(?:\(e\))?\s+le|NÉ(?:\(E\))?\s+LE|DOB|D\.O\.B\.?|[Dd]ate\s+of\s+birth|[Dd]ate\s+de\s+naissance|DATE\s+DE\s+NAISSANCE|[Bb]irth\s*date|[Bb]irthday|[Aa]nniversaire|[Gg]eboren)`;
 const BIRTH_BEFORE_RE = new RegExp(String.raw`${BIRTH_LABEL}\s*(?:on|in|le|en|:)?\s*$`, 'u');
@@ -140,6 +143,11 @@ const ADDRESS_NUM_RE = new RegExp(String.raw`(?<![\p{L}\p{N}.,])\d{1,4}(?:[ \t]?
 // Lower-case street words count only before a capitalised name: "1 place Alexis Ricordeau", not "3 cours de yoga".
 const ADDRESS_LOWER_RE = /(?<![\p{L}\p{N}.,])\d{1,4}(?:[ \t]?(?:bis|ter))?,?[ \t]+(?:place|route|cours|square|passage|voie|esplanade|rond-point|lieu-dit|hameau|résidence|lotissement|street|road|lane|drive|way|court|close)[ \t]+(?:(?:de|du|des|de la|d'|l'|la|le|of|the)[ \t]*)?\p{Lu}[^\n,;]*/gu;
 const ADDRESS_STREET_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}(?:rue|Rue|RUE|avenue|Avenue|boulevard|Boulevard|allée|Allée|impasse|Impasse|chemin|Chemin|quai|Quai|faubourg|Faubourg)[ \t]+(?:(?:de|du|des|de la|d'|l'|la|le)[ \t]*)?\p{Lu}[^\n,;]*`, 'gu');
+// German and Swiss streets: "Bahnhofstrasse 12", "Hauptstraße 5", "Lindenweg 3a".
+const STREET_DE_RE = /(?<![\p{L}\p{N}])\p{Lu}[\p{L}\-]*(?:strasse|straße|str\.|gasse|weg|platz|allee|ring|damm|ufer|graben|steig|matte)[ \t]+\d{1,4}[a-zA-Z]?(?![\p{L}\p{N}])/gu;
+// Swiss, Austrian and German postcodes with the city: "1204 Genève", "CH-8001 Zürich", "1010 Wien".
+// 4 digits only at the start of a line, after a comma or with a country prefix, so that "2024 Holter" stays.
+const POSTCODE_4_RE = /(?:(?<=^|,[ \t]*)|(?:CH|A|AT|D|DE)-)\d{4}[ \t]+\p{Lu}[\p{L}'’\-]+(?:[ \t]+(?:am|an|bei|im|sur|\p{Lu}[\p{L}'’\-]*))*(?=[ \t]*(?:$|[,;\n]))/gmu;
 const PO_BOX_RE = /(?<![\p{L}\p{N}])(?:P\.?[ \t]?O\.?[ \t]?Box|PO[ \t]?BOX|Bo[îi]te[ \t]+postale|B\.P\.|CS|TSA)[ \t]*\d+/gu;
 const POSTCODE_FR_RE = new RegExp(String.raw`(?<![\p{L}\p{N}.,])(?:F-|FR-)?\d{5}[ \t]+\p{Lu}[\p{L}'’\-]+(?:[ \t\-]+(?:CEDEX(?:[ \t]+\d{1,2})?|sur|sous|en|lès|les|de|du|la|le|\p{Lu}[\p{L}'’\-]*))*`, 'gu');
 const POSTCODE_UK_RE = /(?<![\p{L}\p{N}])[A-Z]{1,2}\d[A-Z\d]?[ \t]*\d[A-Z]{2}(?![\p{L}\p{N}])/gu;
@@ -148,6 +156,8 @@ const ZIP_US_RE = /(?<![\p{L}\p{N}])(?:\p{Lu}[\p{L}.\-]*(?:[ \t]\p{Lu}[\p{L}.\-]
 // IDs
 const ID_LABEL_RE = /(?<![\p{L}\p{N}])((?:IPP|NIP|NIR|MRN|NHS(?:\s+(?:number|no\.?))?|N°\s*SS|S[ée]curit[ée]\s+sociale|Dossier|File|Fichier|Patient\s+ID|ID|Identifiant|R[ée]f\.?|R[ée]f[ée]rence|Reference|Sample(?:\s+(?:no\.?|number|n°))?|[ÉE]chantillon|Specimen|Accession|Order(?:\s+(?:no\.?|number|n°))?|Commande|Demande(?:\s+n°)?|Pr[ée]l[èe]vement(?:\s+n°)?|N°|Nº|No\.|Num[ée]ro|Number|Account|Compte|Policy|Contrat|Invoice|Facture|Visit|Encounter|Episode|S[ée]jour)\s*[:#]?\s*(?:n°|no\.?|#)?\s*)([A-Za-z0-9][A-Za-z0-9/\-.]*[A-Za-z0-9])(?![\p{L}\p{N}])/giu;
 // National numbers written with spaces: NIR "1 91 03 75 123 456 78", NHS "943 476 5919", SSN "123-45-6789".
+// Swiss social insurance number (AVS/AHV): "756.1234.5678.97".
+const AVS_RE = /(?<![\p{N}.])756[. ]?\d{4}[. ]?\d{4}[. ]?\d{2}(?![\p{N}])/gu;
 const SPACED_ID_RE = /(?<![\p{L}\p{N}])((?:NIR|N°\s*SS|S[ée]curit[ée]\s+[Ss]ociale|NHS(?:\s+(?:number|no\.?))?|SSN|Social\s+[Ss]ecurity(?:\s+(?:number|no\.?))?|Carte\s+[Vv]itale)\s*[:#]?\s*(?:n°|no\.?)?\s*)[\dAB][\dAB \-]{7,24}\d/gu;
 const HASH_ID_RE = /#[ \t]?[A-Za-z0-9][A-Za-z0-9/\-.]*\d[A-Za-z0-9/\-]*/gu;
 const ID_ALNUM_RE = /(?<![\p{L}\p{N}\-])[A-Z]{1,5}[\- ]?\d{5,}(?![\p{L}\p{N}])/gu;
@@ -271,7 +281,9 @@ export function makeRedactor({ profile = {}, words = [], correspondents = [], re
 
     // 4. Names found by their context
     t = t.replace(HEADER_NAME_RE, (m, label) => `${label}[name]`);
-    t = t.replace(TITLE_RE, (m, title, dot, name) => (title === 'M' && !dot ? m : `${title}${dot} [name]`));
+    // The titles stay, the degrees and the name go: "Prof. Dr. med. Thomas Müller" → "Prof. Dr. [name]".
+    t = t.replace(TITLE_RE, (m, title, dot, more) => (title === 'M' && !dot && !more ? m
+      : `${title}${dot}${(more.match(new RegExp(String.raw`[ \t]+(?:${TITLE_WORDS})\.?`, 'gu')) || []).join('')} [name]`));
     t = t.replace(CUE_RE, (m, cue, sp, name) => (/^(?:Re|RE|Pt|To|From|De|À|Pour|Cc|GP|Patient)$/.test(cue) && !/:/.test(sp) && !/^\[name\]/.test(name) && !/[ \t]/.test(name.trim())
       ? m : `${cue}${sp || ' '}[name]`));
     t = t.replace(CREDENTIAL_RE, (m, name, cred) => `[name]${cred}`);
@@ -288,9 +300,12 @@ export function makeRedactor({ profile = {}, words = [], correspondents = [], re
     t = t.replace(ADDRESS_NUM_RE, '[address]');
     t = t.replace(ADDRESS_LOWER_RE, '[address]');
     t = t.replace(ADDRESS_STREET_RE, '[address]');
+    t = t.replace(STREET_DE_RE, '[address]');
     t = t.replace(PO_BOX_RE, '[address]');
+    t = t.replace(POSTCODE_4_RE, '[address]');
     t = t.replace(POSTCODE_FR_RE, '[address]');
     t = t.replace(POSTCODE_UK_RE, '[address]');
+    t = t.replace(AVS_RE, '[id]');
     t = t.replace(SPACED_ID_RE, (m, label) => `${label}[id]`);
     t = t.replace(ID_LABEL_RE, (m, label, value) => {
       const n = digits(value);

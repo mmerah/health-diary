@@ -138,6 +138,9 @@ function whenKeys(s) {
   return ['unknown'];
 }
 
+/** Diary days needed in each half of the period to speak of a trend. */
+export const MIN_HALF_DAYS = 7;
+
 export function symptomStats(days, { from, to } = {}) {
   const logged = days.filter(d => d.logged);
   const span = diffDays(to, from) + 1;
@@ -165,8 +168,10 @@ export function symptomStats(days, { from, to } = {}) {
     const rate = (n, of) => (of ? n / of : 0);
     const r1 = rate(first.length, halfDays[0]), r2 = rate(second.length, halfDays[1]);
     const s1 = sevOf(first), s2 = sevOf(second);
+    // A trend needs enough diary days in each half: with fewer than 7, "new" or "more" means nothing.
     let trend = 'stable';
-    if (!first.length && second.length >= 2) trend = 'new';
+    if (halfDays[0] < MIN_HALF_DAYS || halfDays[1] < MIN_HALF_DAYS) trend = 'unknown';
+    else if (!first.length && second.length >= 2) trend = 'new';
     else if (second.length - first.length >= 2 && r2 >= r1 * 1.5) trend = 'more';
     else if (s1 != null && s2 != null && s2 - s1 >= 1 && second.length >= 2) trend = 'worse';
     else if (first.length - second.length >= 2 && r1 >= r2 * 1.5) trend = 'less';

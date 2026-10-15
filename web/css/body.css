@@ -48,7 +48,7 @@
 .trend-sub .num { color: var(--ink); }
 .trend-change { font-weight: 700; }
 .trend-range { align-self: flex-start; }
-.trend-range button { min-width: 52px; min-height: 40px; }
+.trend-range button { min-width: 52px; min-height: var(--touch); }
 .chart-none { padding: 8px 0; }
 .trend-card .table th[scope="row"] { white-space: nowrap; font-weight: 400; }
 .trend-card .table td { white-space: nowrap; }

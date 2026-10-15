@@ -262,3 +262,13 @@ test('measurement and counter definitions: own items, and a fallback for deleted
     assert.deepEqual([pain.label, pain.above.length, pain.below.length], ['Back pain', 1, 0]);
   } finally { setCatalog(null); }
 });
+
+test('symptom trend: only with 7 or more diary days in each half', () => {
+  const few = [];
+  for (let i = 20; i <= 28; i++) few.push(day(`2026-10-${i}`, l => { l.symptoms.push(sym('Headache', 1)); }));
+  const [h] = symptomStats(few, { from: '2026-10-01', to: '2026-10-28' });
+  assert.equal(h.trend, 'unknown', 'no diary days in the first half: no "new" trend');
+  const many = [];
+  for (let i = 1; i <= 28; i++) many.push(day(`2026-10-${String(i).padStart(2, '0')}`, l => { l.notes = 'x'; if (i > 20) l.symptoms.push(sym('Headache', 1)); }));
+  assert.equal(symptomStats(many, { from: '2026-10-01', to: '2026-10-28' })[0].trend, 'new');
+});

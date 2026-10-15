@@ -53,7 +53,7 @@ export class HttpApi {
   async exportData() {
     const res = await this.req('/me/export', { raw: true });
     const name = /filename="?([^";]+)/.exec(res.headers.get('content-disposition') || '');
-    return { filename: name ? name[1] : 'health-diary-export.json', blob: await res.blob() };
+    return { filename: name ? name[1] : 'health-diary-export.zip', blob: await res.blob() };
   }
   listUsers() { return this.req('/users'); }
   createUser(u) { return this.req('/users', { method: 'POST', body: u }); }

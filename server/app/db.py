@@ -85,7 +85,9 @@ def transaction():
 
 # ---------- Schema and migrations
 
-# Version 1, the schema of the first release. Never edit it after a release: add a migration.
+# The schema of Health Diary 0.2, version 5 (versions 1 to 4 were 0.1.x, which this release cannot
+# read: see check_version). Never edit it after a release: add a migration.
+BASE_VERSION = 5
 SCHEMA = [
     """CREATE TABLE users (
       id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -152,13 +154,35 @@ SCHEMA = [
     "CREATE INDEX idx_documents_user ON documents(user_id, date)",
 ]
 
-# Changes after the first release, in order: (version, function(connection)). Each step runs in
-# its own transaction and sets user_version to its number. Add steps from here on (2, 3, ...).
+# Changes after 0.2, in order: (version, function(connection)). Each step runs in its own
+# transaction and sets user_version to its number. Add steps from here on (6, 7, ...).
 MIGRATIONS = []
-SCHEMA_VERSION = MIGRATIONS[-1][0] if MIGRATIONS else 1
+SCHEMA_VERSION = MIGRATIONS[-1][0] if MIGRATIONS else BASE_VERSION
+
+
+class DataFolderError(Exception):
+    """The data folder cannot be used by this version. The message is plain text for the log."""
+
+
+def check_version():
+    """Refuses a database from 0.1 or from a newer version. Reads only the file header (user_version
+    is at byte 60): SQLite is not opened, so no file is made or changed, even when run as root."""
+    if not DB_PATH.exists():
+        return
+    with open(DB_PATH, "rb") as f:
+        header = f.read(100)
+    if len(header) < 100 or not header.startswith(b"SQLite format 3\0"):
+        return  # empty or not SQLite: SQLite itself reports it at start
+    version = int.from_bytes(header[60:64], "big")
+    if 1 <= version < BASE_VERSION:
+        raise DataFolderError("This data folder is from Health Diary 0.1. Version 0.2 cannot use it. "
+                              "Stop the app, move the data folder away, then start again with an empty folder.")
+    if version > SCHEMA_VERSION:
+        raise DataFolderError("This data folder is from a newer version of Health Diary. Update the app.")
 
 
 def init():
+    check_version()  # first: a refused folder stays exactly as it is
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     TMP_DIR.mkdir(mode=0o700, exist_ok=True)
     for p in (DATA_DIR, TMP_DIR):
@@ -174,7 +198,7 @@ def init():
         if c.execute("PRAGMA user_version").fetchone()[0] == 0:  # a new database
             for statement in SCHEMA:
                 c.execute(statement)
-            c.execute("PRAGMA user_version = 1")
+            c.execute(f"PRAGMA user_version = {BASE_VERSION}")
     for version, step in MIGRATIONS:
         with transaction() as c:
             if c.execute("PRAGMA user_version").fetchone()[0] < version:

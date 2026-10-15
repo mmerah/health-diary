@@ -5,6 +5,8 @@ set -e
 umask 077
 PUID="${PUID:-1000}"
 PGID="${PGID:-1000}"
+# A data folder that this version cannot use: stop with a plain message, before anything changes.
+python -m app.preflight || exit $?
 if [ "$(id -u)" = "0" ]; then
   mkdir -p "$DATA_DIR"
   # Change only what has another owner or is open to others. No blind chown -R:

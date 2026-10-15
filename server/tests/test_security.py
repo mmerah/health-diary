@@ -169,6 +169,22 @@ def test_streamed_body_without_length_is_counted(c):
     assert r.status_code == 413
 
 
+def test_chunked_document_upload_over_the_limit_is_413(c, monkeypatch):
+    from app import documents
+    monkeypatch.setattr(documents, "MAX_DOC_MB", 1)
+
+    def chunks():
+        yield b"--b\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.pdf\"\r\n\r\n%PDF-"
+        for _ in range(3):
+            yield b"0" * (1024 * 1024)
+        yield b"\r\n--b--\r\n"
+    x = TestClient(main.app, headers={"X-Requested-With": "health-diary"}, cookies=c.cookies,
+                   raise_server_exceptions=False)
+    r = x.post("/api/documents", content=chunks(), headers={"Content-Type": "multipart/form-data; boundary=b"})
+    assert r.status_code == 413 and r.json()["detail"] == "The file is too large. The limit is 1 MB."
+    assert list(db.TMP_DIR.iterdir()) == []
+
+
 def test_import_has_no_size_limit_but_needs_free_disk_space(c, monkeypatch):
     # Bigger than the 1 MB of the JSON routes: accepted (then refused as not an export).
     big = b"x" * (3 * 1024 * 1024)
@@ -309,8 +325,28 @@ def test_paperless_next_link_to_another_host_is_not_followed(monkeypatch):
         return httpx.Response(200, json={"results": [{"id": 2}], "next": None})
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        assert paperless._get_all(client, "/api/documents/") == [{"id": 1}]
+        with pytest.raises(paperless.Partial) as e:
+            paperless._get_all(client, "/api/documents/")
+    assert e.value.items == [{"id": 1}] and "Check PAPERLESS_URL" in str(e.value)
     assert all("evil" not in u for u in seen)
+
+
+def test_paperless_page_links_with_the_public_address_are_rebuilt(monkeypatch):
+    # Behind a proxy, Paperless builds page links with its public address (and maybe a path prefix).
+    monkeypatch.setattr(paperless, "URL", "http://10.0.0.5:8000")
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        page = request.url.params.get("page", "1")
+        nxt = {"1": "https://paperless.example.com/api/documents/?page=2&page_size=100",
+               "2": "https://paperless.example.com/paperless/api/documents/?page=3", "3": None}[page]
+        return httpx.Response(200, json={"results": [{"id": int(page)}], "next": nxt})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        assert paperless._get_all(client, "/api/documents/") == [{"id": 1}, {"id": 2}, {"id": 3}]
+    assert all(u.startswith("http://10.0.0.5:8000/api/documents/") for u in seen)
+    assert seen[1].endswith("?page=2&page_size=100")
 
 
 def test_cache_is_cleared_when_settings_change(c):

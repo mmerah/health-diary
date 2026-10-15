@@ -1,5 +1,6 @@
 import io
 import json
+import sqlite3
 import zipfile
 
 import pytest
@@ -315,7 +316,7 @@ def test_passwords_are_hashed(c):
 
 def test_migrations_set_the_version(c):
     with db.connect() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 1
+        assert con.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 5
         assert con.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert con.execute("PRAGMA secure_delete").fetchone()[0] == 1
 
@@ -425,12 +426,65 @@ def test_catalog_is_in_the_export(c):
 def test_migrations_run_once_in_order(tmp_path, monkeypatch):
     for name, value in (("DATA_DIR", tmp_path), ("DB_PATH", tmp_path / "diary.db"), ("TMP_DIR", tmp_path / "tmp")):
         monkeypatch.setattr(db, name, value)
-    db.init()  # a new database: the base schema, version 1
+    db.init()  # a new database: the base schema, version 5
     runs = []
-    monkeypatch.setattr(db, "MIGRATIONS", [(2, lambda c: runs.append(2) or c.execute("ALTER TABLE users ADD COLUMN x TEXT")),
-                                            (3, lambda c: runs.append(3))])
+    monkeypatch.setattr(db, "MIGRATIONS", [(6, lambda c: runs.append(6) or c.execute("ALTER TABLE users ADD COLUMN x TEXT")),
+                                            (7, lambda c: runs.append(7))])
+    monkeypatch.setattr(db, "SCHEMA_VERSION", 7)
     db.init()
     db.init()
-    assert runs == [2, 3]
+    assert runs == [6, 7]
     with db.connect() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 7
+
+
+def _db_with_version(path, version):
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE kv (key TEXT, value TEXT)")  # like a 0.1 database: no documents table
+    con.execute("INSERT INTO kv VALUES ('profile', '{}')")
+    con.execute(f"PRAGMA user_version = {version}")
+    con.commit()
+    con.close()
+
+
+@pytest.mark.parametrize("version, message", [
+    (4, "This data folder is from Health Diary 0.1. Version 0.2 cannot use it. Stop the app, move the data folder "
+        "away, then start again with an empty folder."),
+    (1, "from Health Diary 0.1"),
+    (99, "This data folder is from a newer version of Health Diary. Update the app."),
+])
+def test_a_data_folder_of_another_version_is_refused_untouched(tmp_path, monkeypatch, capsys, version, message):
+    from app import preflight
+    data = tmp_path / "data"
+    data.mkdir(mode=0o755)
+    _db_with_version(data / "diary.db", version)
+    for name, value in (("DATA_DIR", data), ("DB_PATH", data / "diary.db"), ("TMP_DIR", data / "tmp")):
+        monkeypatch.setattr(db, name, value)
+    before = {p.name: p.read_bytes() for p in data.iterdir()}
+    with pytest.raises(db.DataFolderError, match=message[:40]):
+        db.init()
+    assert preflight.main() == 2
+    assert message in capsys.readouterr().err
+    # Nothing changed: same files, same bytes, same permissions (no tmp folder, no WAL file).
+    assert {p.name: p.read_bytes() for p in data.iterdir()} == before
+    assert data.stat().st_mode & 0o777 == 0o755
+
+
+def test_a_current_or_new_data_folder_starts(tmp_path, monkeypatch):
+    from app import preflight
+    for name, value in (("DATA_DIR", tmp_path), ("DB_PATH", tmp_path / "diary.db"), ("TMP_DIR", tmp_path / "tmp")):
+        monkeypatch.setattr(db, name, value)
+    assert preflight.main() == 0  # no database yet
+    db.init()
+    assert preflight.main() == 0
+    db.init()  # a second start of the same version
+
+
+def test_admin_who_resets_their_own_password_stays_logged_in(c):
+    me = c.get("/api/auth/status").json()["user"]["id"]
+    other = login("anna")
+    assert c.put(f"/api/users/{me}/password", json={"password": "another good one"}).status_code == 204
+    assert c.get("/api/profile").status_code == 200  # this session stays
+    assert other.get("/api/profile").status_code == 401  # other devices are logged out
+    assert c.get("/api/auth/status").json()["user"]["notice"] is None
+    c.put(f"/api/users/{me}/password", json={"password": PW})

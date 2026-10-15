@@ -48,7 +48,7 @@ export function toMarkdown(model, opts = {}) {
       '- This is a personal health diary. The data is self-reported and has gaps. A day without an entry is unknown, not a day without symptoms.',
       '- Sleep, steps, heart rate and HRV come from a consumer wearable. They are estimates.',
       rel ? `- Dates are day numbers. D0 is the last day of the period. D-7 is 7 days before D0.` : '- Dates are written YYYY-MM-DD.',
-      '- Names, addresses, ID numbers, contact details and the date of birth are removed and shown as [name], [address], [id] and so on.',
+      '- Most personal details are removed and shown as [name], [address], [id] and so on (names, dates of birth, addresses, phone numbers, ID numbers).',
       '- Please: refer to the day numbers when you point to data. Say how certain you are. Do not give a diagnosis. Suggest questions that I can ask a clinician.');
   }
   if (model.question) push('', '## My question', '', T(model.question));

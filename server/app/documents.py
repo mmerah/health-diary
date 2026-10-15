@@ -202,21 +202,43 @@ def _ocr(image, cwd, deadline):
     return _tool(["tesseract", str(image), "-", "-l", OCR_LANGS], cwd, deadline)
 
 
+def _pdf_page(src, n, cwd, deadline):
+    """The text of page n: pdftotext, or OCR when the page has (almost) no text (a scan)."""
+    try:
+        text = _tool(["pdftotext", "-layout", "-f", str(n), "-l", str(n), str(src), "-"], cwd, deadline)
+    except ToolFailed:
+        text = ""  # try OCR
+    if len(text.strip()) >= MIN_PAGE_TEXT:
+        return text.strip()
+    try:
+        _tool(["pdftoppm", "-r", "300", "-png", "-singlefile", "-f", str(n), "-l", str(n), str(src),
+               str(cwd / "page")], cwd, deadline)
+        ocr = _ocr(cwd / "page.png", cwd, deadline)
+    finally:
+        (cwd / "page.png").unlink(missing_ok=True)
+    return (ocr if len(ocr.strip()) > len(text.strip()) else text).strip()
+
+
 def extract(kind, src, cwd, deadline):
     """Returns (text, pages)."""
     if kind != "pdf":
         return _ocr(src, cwd, deadline).strip(), 1
     pages = pdf_pages(src, cwd)
-    texts = []
+    texts, read, error = [], 0, None
     for n in range(1, pages + 1):
-        text = _tool(["pdftotext", "-layout", "-f", str(n), "-l", str(n), str(src), "-"], cwd, deadline)
-        if len(text.strip()) < MIN_PAGE_TEXT:  # a scanned page: render it, then OCR
-            _tool(["pdftoppm", "-r", "300", "-png", "-singlefile", "-f", str(n), "-l", str(n), str(src),
-                   str(cwd / "page")], cwd, deadline)
-            ocr = _ocr(cwd / "page.png", cwd, deadline)
-            (cwd / "page.png").unlink(missing_ok=True)
-            text = ocr if len(ocr.strip()) > len(text.strip()) else text
-        texts.append(text.strip())
+        try:
+            texts.append(_pdf_page(src, n, cwd, deadline))
+            read += 1
+        except (ToolFailed, subprocess.TimeoutExpired) as e:
+            # One bad page must not lose the others: mark it, then go on.
+            log.info("Page %d not read: %r", n, e)
+            texts.append(f"[page {n} could not be read]")
+            error = e
+            if time.monotonic() >= deadline:  # no time left: the other pages are not read either
+                texts += [f"[page {m} could not be read]" for m in range(n + 1, pages + 1)]
+                break
+    if not read:
+        raise error
     return "\n\n".join(t for t in texts if t), pages
 
 
@@ -372,6 +394,8 @@ def list_all(uid, refresh=False):
     state = {"ok": True, "error": None}
     try:
         items = paperless.list_documents(uid, force=refresh)
+    except paperless.Partial as e:  # what Paperless gave, with the error beside it
+        items, state = e.items, {"ok": False, "error": str(e)}
     except paperless.PaperlessError as e:
         items, state = [], {"ok": False, "error": str(e)}
     # The user's corrections are never removed automatically: a document can leave the list for a
@@ -394,7 +418,11 @@ def paperless_id(doc_id):
 
 def get_paperless(uid, pid):
     """The Paperless document as the user sees it, or None."""
-    item = next((i for i in paperless.list_documents(uid) if i["id"] == pid), None)
+    try:
+        items = paperless.list_documents(uid)
+    except paperless.Partial as e:
+        items = e.items
+    item = next((i for i in items if i["id"] == pid), None)
     return paperless_json(item, db.get_kv(uid, META_KEY, {})) if item else None
 
 

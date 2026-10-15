@@ -1,8 +1,8 @@
 // Pure helpers for the Records screen. No DOM. Unit-tested in tests/profile.test.js (records part).
 import { fold } from '../core/format.js';
 
-export const MAX_UPLOAD_MB = 25;
-export const MAX_PAGES = 50;
+export const MAX_UPLOAD_MB = 200; // the same limits as the server (docs/documents.md)
+export const MAX_PAGES = 300;
 
 /** Categories in the documents, sorted by name. */
 export const categoriesOf = docs => [...new Set(docs.map(d => d.category).filter(Boolean))].sort((a, b) => a.localeCompare(b));

@@ -8,7 +8,7 @@ The token is only used to read: the diary never changes anything in Paperless.
 import logging
 import os
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -32,6 +32,14 @@ class PaperlessError(Exception):
 
 class NotSetUp(PaperlessError):
     """No Paperless address, or no token: nothing to ask."""
+
+
+class Partial(PaperlessError):
+    """Paperless gave only part of the list. `items` holds that part."""
+
+    def __init__(self, items):
+        super().__init__("Paperless gave only part of the list. Check PAPERLESS_URL.")
+        self.items = items
 
 
 def _origin(url):
@@ -89,9 +97,21 @@ def _client(token):
                         timeout=20, follow_redirects=True)
 
 
-def _get_all(client, path, params=None):
-    """Follows Paperless pagination ("next") and returns all results.
-    Follows only links to the Paperless address, so the token is never sent elsewhere."""
+def _next_page(next_url, path):
+    """The address of the next page, on PAPERLESS_URL. Behind a proxy, Paperless often builds its
+    page links with its public address: keep only their path and query. None if the link is not a
+    page of the same list (the token is never sent elsewhere)."""
+    n, base = urlsplit(next_url), urlsplit(URL)
+    if _origin(next_url) == _origin(URL):
+        return next_url
+    if not n.path.endswith(path):
+        return None
+    return urlunsplit((base.scheme, base.netloc, base.path.rstrip("/") + path, n.query, ""))
+
+
+def _get_all(client, path, params=None, partial=None):
+    """Follows Paperless pagination ("next") and returns all results. When a page link cannot be
+    followed: adds `path` to the list `partial` and returns what it has, or raises Partial."""
     out, url = [], f"{URL}{path}"
     while url:
         r = client.get(url, params=params)
@@ -99,9 +119,15 @@ def _get_all(client, path, params=None):
         data = r.json()
         out.extend(data["results"])
         url, params = data.get("next"), None
-        if url and _origin(url) != _origin(URL):
-            log.warning("Paperless sent a page link to another address (%s). It was not followed.", _origin(url)[1])
-            break
+        if url:
+            following = _next_page(url, path)
+            if following is None:
+                log.warning("Paperless sent a page link that the diary cannot follow (%s).", _origin(url)[1])
+                if partial is None:
+                    raise Partial(out)
+                partial.append(path)
+                break
+            url = following
     return out
 
 
@@ -120,13 +146,15 @@ def _call(uid, work):
         raise PaperlessError("Paperless sent an answer that the diary cannot read.") from e
 
 
-def _all_tags(uid, client, force=False):
+def _all_tags(uid, client, force=False, partial=None):
     hit = _tags.get(uid)
     if not force and hit and time.time() - hit[0] < CACHE_SECONDS:
         return hit[1]
+    seen = [] if partial is None else partial
     tags = [{"id": t["id"], "name": t["name"], "document_count": t.get("document_count") or 0}
-            for t in _get_all(client, "/api/tags/", {"page_size": 1000})]
-    _tags[uid] = (time.time(), tags)
+            for t in _get_all(client, "/api/tags/", {"page_size": 1000}, seen)]
+    if not seen:  # cache only a complete list
+        _tags[uid] = (time.time(), tags)
     return tags
 
 
@@ -174,17 +202,19 @@ def list_documents(uid, force=False):
     if not force and hit and hit[1] == _key(names) and time.time() - hit[0] < CACHE_SECONDS:
         return hit[2]
 
+    partial = []
+
     def work(c):
-        ids, missing = _resolve(_all_tags(uid, c, force=force), names)
+        ids, missing = _resolve(_all_tags(uid, c, force=force, partial=partial), names)
         if missing:
             log.info("Paperless has no tag named %s (user %s).", ", ".join(missing), uid)
         docs = []
         if ids:
             params = {"tags__id__in": ",".join(map(str, ids)), "page_size": 100, "ordering": "-created"}
-            docs = _get_all(c, "/api/documents/", params)
+            docs = _get_all(c, "/api/documents/", params, partial)
 
         def names_of(path):
-            return {x["id"]: x["name"] for x in _get_all(c, path, {"page_size": 1000})}
+            return {x["id"]: x["name"] for x in _get_all(c, path, {"page_size": 1000}, partial)}
         return docs, missing, names_of("/api/correspondents/") if docs else {}, \
             names_of("/api/document_types/") if docs else {}
 
@@ -205,5 +235,7 @@ def list_documents(uid, force=False):
             "url": f"{PUBLIC_URL}/documents/{d['id']}/details",
             "added": str(d.get("added") or "")[:19] or None,
         })
+    if partial:
+        raise Partial(result)  # not cached: the next call tries again
     _cache[uid] = (time.time(), _key(names), result, missing)
     return result

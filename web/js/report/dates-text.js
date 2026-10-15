@@ -153,17 +153,20 @@ export function findDates(text, { nowYear, ref = null } = {}) {
       }
       let alt = null;
       if (p.kind === 'dmy' || p.kind === 'dm') {
-        // Slash and dot dates are read day first (European order), as in most documents this app reads.
-        // When the first number cannot be a month and the second can (03/14/1991), it is month first.
-        // When both readings are valid, the one nearest the document date wins (US letters), and the other is kept in `alt`.
-        if (mo > 12 && d <= 12) [mo, d] = [d, mo];
-        else if (mo <= 12 && d <= 12 && mo !== d) {
-          const yy = y ? fullYear(y, year) : null;
-          if (valid(yy, d, mo)) {
-            const a = yy ? isoOf(yy, mo, d) : ref && inferYear(mo, d, ref) ? isoOf(inferYear(mo, d, ref), mo, d) : null;
-            const b = yy ? isoOf(yy, d, mo) : ref && inferYear(d, mo, ref) ? isoOf(inferYear(d, mo, ref), d, mo) : null;
-            if (ref && a && b && Math.abs(dayNum(b) - dayNum(ref)) < Math.abs(dayNum(a) - dayNum(ref))) { [mo, d] = [d, mo]; alt = a; } else alt = b;
-          }
+        // Dot and dash dates (14.03.2026, 14-03-2026) are always day first.
+        // Slash dates are day first too (most users and documents are European; the server reads them the same way).
+        // Month first only when day first is impossible (03/14/1991), or when day first would be after the
+        // document date and month first would not. The other reading is kept in `alt` (for the date of birth).
+        const slash = p.kind === 'dm' || m[2] === '/';
+        const yy = y ? fullYear(y, year) : null;
+        if (slash && mo > 12 && d <= 12) [mo, d] = [d, mo];
+        else if (slash && mo <= 12 && d <= 12 && mo !== d && valid(yy, d, mo)) {
+          const iy = (mm, dd) => (yy || (ref ? inferYear(mm, dd, ref) : null));
+          const dayFirst = iy(mo, d) ? isoOf(iy(mo, d), mo, d) : null;
+          const monthFirst = iy(d, mo) ? isoOf(iy(d, mo), d, mo) : null;
+          if (ref && dayFirst && monthFirst && dayFirst > ref && monthFirst <= ref) { [mo, d] = [d, mo]; alt = dayFirst; } else alt = monthFirst;
+        } else if (!slash && mo <= 12 && d <= 12 && mo !== d && valid(yy, d, mo)) {
+          alt = yy ? isoOf(yy, d, mo) : null;
         }
       }
       const yy = y ? fullYear(y, year) : null;

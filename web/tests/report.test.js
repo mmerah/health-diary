@@ -283,3 +283,19 @@ test('blood oxygen and respiratory rate: weekly medians, first and last 4 weeks,
   assert.match(html, /Lowest value under 90 % on 2 days: \d+ \w+ \(87 %\)/, 'real dates for the doctor');
   assert.ok(!/diagnos|apnoea|apnea/i.test(r.md.split('## Key points')[1].split('##')[0]), 'no diagnosis words');
 });
+
+test('few diary days: no symptom key points, no "0 of 0 diary days"', () => {
+  const keep = allDays().filter(x => x.log && x.log.symptoms && x.log.symptoms.length).slice(-6).map(x => x.date);
+  const d = data({ days: allDays().filter(x => keep.includes(x.date)) });
+  const model = buildReportModel(d, { from: addDays(TO, -89), to: TO, audience: 'ai' });
+  assert.ok(model.lowData);
+  assert.ok(!model.flags.some(f => f.kind.startsWith('symptom-')));
+  const md = toMarkdown(model, { redactor: makeRedactor({ profile: db.profile, relativeTo: TO }), relative: true });
+  assert.ok(!md.includes('0 of 0') && !md.includes('New in the second half'));
+  assert.match(md, /Trend: too few diary days to compare/);
+});
+
+test('the AI text says that most personal details are removed, not all', () => {
+  const { md } = aiReport();
+  assert.match(md, /Most personal details are removed/);
+});

@@ -32,6 +32,14 @@ Open `http://localhost:8000`.
 1. In `docker-compose.yml`, replace `image:` with `build: .`.
 2. Run `docker compose up --build`.
 
+## Images
+
+| Tag | Built from |
+|---|---|
+| `latest`, `0.2`, `0.2.0` | A release (a `v*` tag). Use these. |
+| `edge` | The newest commit on `main`. For testing only. |
+| `sha-<commit>` | One commit. |
+
 ## Tests
 
 ```sh

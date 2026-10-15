@@ -118,7 +118,7 @@ function settingsHtml() {
     <div class="field">
       <span class="label" id="rp-who">Who is it for?</span>
       ${seg('audience', [['doctor', 'My doctor'], ['ai', 'An AI (anonymized)']], o.audience, 'Who is it for?')}
-      <p class="hint" id="rp-who-hint">${ai ? 'A text for an AI assistant. Names, dates of birth, addresses, ID numbers and contact details are removed.' : 'A formatted report: key points first, then the details. You can print it, save it as a PDF or share it.'}</p>
+      <p class="hint" id="rp-who-hint">${ai ? 'A text for an AI assistant. Most personal details are removed (names, dates of birth, addresses, phone numbers, ID numbers). Read the report before you share it.' : 'A formatted report: key points first, then the details. You can print it, save it as a PDF or share it.'}</p>
     </div>
     <div class="field">
       <span class="label">Period</span>
@@ -155,7 +155,7 @@ function settingsHtml() {
     <div class="field rp-ai-only" ${ai ? '' : 'hidden'}>
       <label class="label" for="rp-words">Other words to hide, one per line</label>
       <textarea id="rp-words" data-field="words" rows="3" placeholder="Hospital, lab or town names">${esc((S.settings.redactWords || []).join('\n'))}</textarea>
-      <p class="hint">Hidden already: your name, the names of your doctors and labs from the documents, your date of birth, addresses, phone numbers, emails, links and ID numbers. Read the report before you share it.</p>
+      <p class="hint">Most personal details are removed already: your name, the names of your doctors and labs from the documents, dates of birth, addresses, phone numbers, emails, links and ID numbers. Add other words here. Read the report before you share it.</p>
     </div>
   </form>`;
 }
@@ -211,7 +211,7 @@ function paint() {
   view.querySelector('#rp-range-error').textContent = range().error || '';
   view.querySelector('#rp-include-sum').textContent = includeSummary();
   view.querySelector('#rp-who-hint').textContent = ai
-    ? 'A text for an AI assistant. Names, dates of birth, addresses, ID numbers and contact details are removed.'
+    ? 'A text for an AI assistant. Most personal details are removed (names, dates of birth, addresses, phone numbers, ID numbers). Read the report before you share it.'
     : 'A formatted report: key points first, then the details. You can print it, save it as a PDF or share it.';
   view.querySelectorAll('[role="radio"][data-act]').forEach(b => {
     const key = { audience: 'audience', period: 'period', docScope: 'docScope' }[b.dataset.act];

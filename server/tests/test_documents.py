@@ -407,3 +407,34 @@ def test_large_files_are_stored_in_chunks(c, tmp_path, monkeypatch):
         documents.read_file(uid, 900001)
     documents.remove_file(uid, 900001)
     documents.remove_file(uid, 900002)
+
+
+# ---------- One unreadable page
+
+@needs_tools
+def test_one_bad_page_does_not_lose_the_others(c, monkeypatch):
+    real = documents.run
+
+    def page_two_breaks(args, timeout, cwd):
+        if "-f" in args and args[args.index("-f") + 1] == "2" and args[0] in ("pdftotext", "pdftoppm"):
+            return documents.subprocess.CompletedProcess(args, 1, b"", b"broken page")
+        return real(args, timeout, cwd)
+    monkeypatch.setattr(documents, "run", page_two_breaks)
+    pages = [f"Page {n}: cholesterol and ferritin values, enough text for pdftotext here." for n in (1, 2, 3)]
+    doc = ready(c, upload(c, text_pdf(pages)).json()["id"])
+    assert doc["status"] == "ready" and doc["pages"] == 3
+    assert "Page 1:" in doc["content"] and "Page 3:" in doc["content"]
+    assert "[page 2 could not be read]" in doc["content"] and "Page 2:" not in doc["content"]
+
+
+@needs_tools
+def test_no_readable_page_fails(c, monkeypatch):
+    real = documents.run
+
+    def all_break(args, timeout, cwd):
+        if args[0] in ("pdftotext", "pdftoppm"):
+            return documents.subprocess.CompletedProcess(args, 1, b"", b"broken")
+        return real(args, timeout, cwd)
+    monkeypatch.setattr(documents, "run", all_break)
+    doc = ready(c, upload(c, text_pdf(["One", "Two"])).json()["id"])
+    assert doc["status"] == "failed" and doc["error"].startswith("Could not read the text")

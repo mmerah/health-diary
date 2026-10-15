@@ -136,7 +136,8 @@ test('records: excluded ids keep their type', () => {
 test('records: upload checks', () => {
   assert.match(uploadError(null), /Choose a file/);
   assert.match(uploadError({ name: 'a.docx', type: 'application/msword', size: 10 }), /PDF or a photo/);
-  assert.match(uploadError({ name: 'a.pdf', type: 'application/pdf', size: 26 * 1024 * 1024 }), /25 MB/);
+  assert.match(uploadError({ name: 'a.pdf', type: 'application/pdf', size: 201 * 1024 * 1024 }), /200 MB/);
+  assert.equal(uploadError({ name: 'a.pdf', type: 'application/pdf', size: 150 * 1024 * 1024 }), '');
   assert.equal(uploadError({ name: 'IMG_1.HEIC', type: '', size: 1000 }), '');
 });
 

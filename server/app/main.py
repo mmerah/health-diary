@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from python_multipart.multipart import MultipartParser, parse_options_header
 from starlette.background import BackgroundTask
+from starlette.datastructures import Headers, MutableHeaders
 
 from . import auth, catalog, crypto, db, documents, health, models, paperless
 
@@ -109,34 +110,50 @@ async def server_error(request, exc):
 
 # ---------- Middleware
 
-@app.middleware("http")
-async def security(request: Request, call_next):
-    # A page on another site must not be able to change data with your cookie. Browsers send
-    # Sec-Fetch-Site and pages cannot fake it. Without it (older browsers), the request must carry
-    # the X-Requested-With header that the app sends: a cross-site form cannot add it.
-    # SameSite=Lax cookies are a second barrier. The shortcut uses a key, not a cookie.
-    if request.method not in ("GET", "HEAD", "OPTIONS") and request.url.path != INGEST_PATH:
-        site = request.headers.get("sec-fetch-site")
-        allowed = site in ("same-origin", "none") if site else \
-            request.headers.get("x-requested-with") == "health-diary"
-        if not allowed:
-            return JSONResponse({"detail": "Request refused. It did not come from this app."}, status_code=403)
-    response = await call_next(request)
-    # A route may set a stricter policy (stored document files: sandbox).
-    response.headers.setdefault("Content-Security-Policy", CSP)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Referrer-Policy"] = "no-referrer"
-    response.headers.setdefault("X-Frame-Options", "DENY")
-    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
-    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-    ctype = response.headers.get("content-type", "")
-    if request.url.path.startswith("/api/"):
-        response.headers["Cache-Control"] = "no-store"
-    elif ctype.startswith(("text/html", "text/javascript", "application/javascript", "text/css")):
-        # Check with the server each time (ETag makes that cheap). After an upgrade,
-        # the browser never runs old JavaScript with new HTML.
-        response.headers["Cache-Control"] = "no-cache"
-    return response
+class Security:
+    """Security headers on every answer, and the check against requests from other sites.
+    Plain ASGI (not @app.middleware): errors while the body is read reach the app's handlers
+    as they are, not wrapped in an exception group."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        path, method = scope["path"], scope["method"]
+        # A page on another site must not be able to change data with your cookie. Browsers send
+        # Sec-Fetch-Site and pages cannot fake it. Without it (older browsers), the request must carry
+        # the X-Requested-With header that the app sends: a cross-site form cannot add it.
+        # SameSite=Lax cookies are a second barrier. The shortcut uses a key, not a cookie.
+        if method not in ("GET", "HEAD", "OPTIONS") and path != INGEST_PATH:
+            headers = Headers(scope=scope)
+            site = headers.get("sec-fetch-site")
+            allowed = site in ("same-origin", "none") if site else headers.get("x-requested-with") == "health-diary"
+            if not allowed:
+                response = JSONResponse({"detail": "Request refused. It did not come from this app."}, status_code=403)
+                return await response(scope, receive, send)
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                h = MutableHeaders(scope=message)
+                # A route may set a stricter policy (stored document files: sandbox).
+                h.setdefault("Content-Security-Policy", CSP)
+                h["X-Content-Type-Options"] = "nosniff"
+                h["Referrer-Policy"] = "no-referrer"
+                h.setdefault("X-Frame-Options", "DENY")
+                h["Cross-Origin-Opener-Policy"] = "same-origin"
+                h["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+                if path.startswith("/api/"):
+                    h["Cache-Control"] = "no-store"
+                elif h.get("content-type", "").startswith(("text/html", "text/javascript", "application/javascript",
+                                                            "text/css")):
+                    # Check with the server each time (ETag makes that cheap). After an upgrade,
+                    # the browser never runs old JavaScript with new HTML.
+                    h["Cache-Control"] = "no-cache"
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
 
 class BodyLimit:
@@ -186,7 +203,8 @@ class BodyLimit:
         await self.app(scope, counted, guarded_send)
 
 
-app.add_middleware(BodyLimit)
+app.add_middleware(Security)
+app.add_middleware(BodyLimit)  # added last: runs first
 
 
 def check_date(d):
@@ -390,14 +408,16 @@ def _target(uid):
 
 
 @app.put("/api/users/{uid}/password", status_code=204)
-def reset_password(uid: int, body: models.Password, me=Admin):
+def reset_password(request: Request, uid: int, body: models.Password, me=Admin):
     target = _target(uid)
     auth.check_new_password(body.password, target["username"])
     # The user sees this at the next login, so a reset is never hidden from them.
     notice = (f"An administrator ({me['username']}) reset your password on {Date.today().isoformat()}. "
               "If you did not ask for this, talk to them.")
     db.set_password(uid, auth.hash_password(body.password), notice=notice if uid != me["id"] else None)
-    db.delete_sessions(uid)
+    # Logs the user out everywhere. An administrator who sets their own password stays logged in
+    # here, like with Change password.
+    db.delete_sessions(uid, keep=request.state.session_hash if uid == me["id"] else None)
     log.info("Admin %s reset the password of %s.", me["username"], target["username"])
 
 

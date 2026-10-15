@@ -97,7 +97,7 @@ export function whenText(s) {
 }
 
 export const TREND = { new: 'new in the second half', more: 'more frequent in the second half', worse: 'more severe in the second half',
-  less: 'less frequent in the second half', stable: 'no clear change' };
+  less: 'less frequent in the second half', stable: 'no clear change', unknown: 'too few diary days to compare' };
 
 export function drinkText(d) {
   const unit = n => (Number(n) === 1 ? d.one : d.many);

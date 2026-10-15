@@ -365,9 +365,11 @@ test('postcodes: only in an address context, never counts', () => {
 test('hospital and practice names', () => {
   const rr = makeRedactor({ relativeTo: '2026-10-15' });
   for (const s of ['Kantonsspital Aarau', 'Universitätsspital Zürich', 'Stadtspital Triemli', 'Klinik Hirslanden', 'Klinikum Rechts der Isar',
-    'Krankenhaus Nord', 'Hôpital Cochin', 'Clinique de la Source', 'Praxis Dr. Meier', 'Cabinet médical du Lac', 'Medical Center X']) {
+    'Krankenhaus Nord', 'Hôpital Cochin', 'Clinique de la Source', 'Cabinet médical du Lac', 'Medical Center X']) {
     assert.equal(rr.text(s), '[hospital]', s);
   }
+  // A practice named after its doctor: the person is hidden by the title rule.
+  assert.equal(rr.text('Praxis Dr. Meier'), 'Praxis Dr. [name]');
   assert.equal(rr.text('Eintritt ins Kantonsspital Aarau am 3/10', { ref: '2026-10-14' }), 'Eintritt ins [hospital] am D-12');
   // Medical words that only contain the stems stay.
   for (const s of ['Spitalaufenthalt 3 Tage', 'Klinikaufenthalt', 'hospitalisation en 2019', 'im Spital wegen Pneumonie', 'ins Krankenhaus gebracht',
@@ -409,8 +411,9 @@ test('German and Italian month names and birth cues', () => {
 
 test('institutions: -praxis names, a name before the word, hospital acronyms', () => {
   const rr = makeRedactor({ relativeTo: '2026-10-15' });
-  for (const s of ['HUG', 'CHUV', 'USZ', 'KSSG', 'LUKS', 'Inselspital', 'AP-HP', 'Charité', 'Gemeinschaftspraxis Huber & Meier', 'Hausarztpraxis Dr. Keller',
+  for (const s of ['HUG', 'CHUV', 'USZ', 'KSSG', 'LUKS', 'Inselspital', 'AP-HP', 'Charité', 'Gemeinschaftspraxis Huber & Meier',
     'Facharztpraxis Weber und Partner', 'Hirslanden Klinik Im Park', 'Bethanien Spital', 'Lindenhof Spital']) assert.equal(rr.text(s), '[hospital]', s);
+  assert.equal(rr.text('Hausarztpraxis Dr. Keller'), 'Hausarztpraxis Dr. [name]');
   assert.equal(rr.text('Überweisung an das CHUV, Lausanne'), 'Überweisung an das [hospital], Lausanne');
   // Medical words and plain uses stay.
   for (const s of ['Hausarztpraxis', 'in der Praxis', 'Praxisgebühr', 'Die Klinik war gut', 'Psychiatrische Klinik', 'CH-Wert', 'BACHUG', 'HUGE']) {

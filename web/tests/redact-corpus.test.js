@@ -87,6 +87,9 @@ const MUST_KEEP = [
 ];
 
 const MUST_HIDE = [
+  // A doctor after a hospital name on the same line (review round 6).
+  ['Spital Zollikerberg Dr. med. Hans Meier', '[hospital] Dr. [name]'],
+  ['Hôpital Cochin Pr Jean Dupont', '[hospital] Pr [name]'],
   ['Alex Example', '[name]'],
   ['ALEX EXAMPLE', '[name]'],
   ['alex example', '[name]'],
@@ -161,7 +164,7 @@ const MUST_HIDE = [
   ['Hirslanden Klinik Im Park', '[hospital]'],
   ['Klinikum Rechts der Isar', '[hospital]'],
   ['Gemeinschaftspraxis Huber & Meier', '[hospital]'],
-  ['Praxis Dr. Meier', '[hospital]'],
+  ['Praxis Dr. Meier', 'Praxis Dr. [name]'],
   ['Cabinet médical du Lac', '[hospital]'],
   ['Ospedale San Raffaele', '[hospital]'],
   ['Clinica Luganese', '[hospital]'],

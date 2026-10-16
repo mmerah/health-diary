@@ -46,7 +46,7 @@ To add users: **Profile → Settings → Users**.
 2. **Profile → Settings → My lists:** set your symptoms, measurements and counters (optional).
 3. **Records:** add your medical documents, or connect Paperless in **Profile → Settings**.
    See [Documents](docs/documents.md).
-4. **Apple Health:** import your history once, then set up the daily sync.
+4. **Apple Health:** install the shortcut in one tap, then import your history once.
    See [iPhone shortcut](docs/shortcut.md).
 
 ## Update

@@ -196,7 +196,7 @@ function measureForm(q, type) {
 
 const loaders = {
   async meal(q) {
-    const [log, days] = await Promise.all([dayLog(q), q.ctx.api.listDays(addDays(q.date, -14), addDays(q.date, -1)).catch(() => [])]);
+    const [log, days] = await Promise.all([dayLog(q), q.ctx.api.listDays(addDays(q.date, -60), addDays(q.date, -1)).catch(() => [])]);
     if (q.view !== 'meal') return;
     q.form.log = log;
     q.form.recentDays = days;
@@ -268,7 +268,7 @@ function timeHint(q, key, t) {
   return q.isToday && t.usual ? `The time is set to the usual ${def.label.toLowerCase()} time. Change it if needed.` : '';
 }
 
-/** One-tap texts: "Same as yesterday" and the last distinct texts of this meal (14 days). */
+/** One-tap texts: "Same as yesterday" and the texts of this meal typed most often (60 days). */
 function showRecent(q) {
   const box = q.root.querySelector('[data-recent]');
   if (!box) return;

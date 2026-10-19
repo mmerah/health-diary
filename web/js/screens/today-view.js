@@ -6,7 +6,7 @@ import { MEALS, PERIODS, SEVERITIES, bmi, counterTypes, measurementDef, measurem
 import { ICON } from '../core/ui.js';
 import {
   clip, drinksSummary, healthExtras, healthItems, healthSource, mealSummary, measurementsSummary, medsSummary,
-  sleepStages, snacksSummary, symptomDetail, symptomsSummary,
+  recentMeals, sleepStages, snacksSummary, symptomDetail, symptomsSummary,
 } from './today-model.js';
 
 const CHIPS_SHOWN = 8;
@@ -253,10 +253,19 @@ function healthForm(st) {
 
 // ---------- Section bodies
 
+/** One-tap texts for an empty meal, the most frequent first. Empty while the days load. */
+export function mealChipsHtml(st, key) {
+  if (!st.recentDays || st.log.meals[key].text.trim()) return '';
+  return recentMeals(st.recentDays, key, st.date).map(r => `<button type="button" class="chip" data-act="use-meal" data-meal="${esc(key)}"
+    data-text="${esc(r.text)}" title="${esc(r.text)}">${esc(r.label)}</button>`).join('');
+}
+
 function mealBody(st, key) {
   const m = st.log.meals[key];
   const def = MEALS.find(x => x.key === key);
+  const chips = mealChipsHtml(st, key);
   return `<div class="meal-edit">
+    <div class="chips" role="group" aria-label="${esc(`Recent ${def.label.toLowerCase()}s`)}" data-meal-chips="${esc(key)}"${chips ? '' : ' hidden'}>${chips}</div>
     <label class="field grow"><span>What did you eat?</span><textarea rows="2" data-f="meal-text" data-meal="${esc(key)}" placeholder="${esc(`${def.label}: food and drink`)}">${esc(m.text)}</textarea></label>
     <label class="field meal-time"><span>Time</span><input class="time" type="time" data-f="meal-time" data-meal="${esc(key)}" value="${esc(m.time)}"></label>
   </div>`;

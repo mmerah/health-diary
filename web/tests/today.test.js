@@ -152,6 +152,14 @@ test('recent meals: same as yesterday first, then distinct older texts', () => {
   assert.deepEqual(M.recentMeals([day('2026-10-11', 'Salad')], 'lunch', '2026-10-14').map(x => x.label), ['Salad']);
 });
 
+test('recent meals: the texts typed most often come first', () => {
+  const day = (date, text) => ({ date, log: { meals: { lunch: { text } } } });
+  const r = M.recentMeals([day('2026-10-12', 'Soup'), day('2026-10-11', 'Rice, chicken, spinach.'),
+    day('2026-10-10', 'Salad'), day('2026-10-08', 'rice, chicken, spinach'), day('2026-10-05', 'Rice, chicken, spinach'),
+    day('2026-10-04', 'Salad')], 'lunch', '2026-10-14');
+  assert.deepEqual(r.map(x => x.text), ['Rice, chicken, spinach.', 'Salad', 'Soup']);
+});
+
 const L = raw => normalizeLog(raw);
 
 test('merge: other device changes are kept, mine are put back, same section → mine wins', () => {

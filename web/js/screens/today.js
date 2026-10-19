@@ -4,14 +4,14 @@ import { api } from '../api/index.js';
 import { createAutosave } from '../core/autosave.js';
 import { addDays, nowHm, today as todayIso } from '../core/dates.js';
 import { fold, listJoin } from '../core/format.js';
-import { activeMeds, asNeededMeds, hasContent, medLabel, normalizeLog, normalizeProfile, periodOf, symptomChips } from '../core/schema.js';
+import { MEALS, activeMeds, asNeededMeds, hasContent, medLabel, normalizeLog, normalizeProfile, periodOf, symptomChips } from '../core/schema.js';
 import { session } from '../core/session.js';
 import { store, toast } from '../core/ui.js';
 import {
   changedSections, clampDate, correctHealth, defaultOpen, mergeLog, newSymptom, saveMerging, stepDrink,
   symptomChipList, weekDays, healthPatch,
 } from './today-model.js';
-import { bodyOf, chipsHtml, emptyOf, healthSection, page, summaryOf, symptomItem, weekStrip } from './today-view.js';
+import { bodyOf, chipsHtml, emptyOf, healthSection, mealChipsHtml, page, summaryOf, symptomItem, weekStrip } from './today-view.js';
 
 const WIDE = '(min-width: 1000px)';
 
@@ -67,18 +67,23 @@ let openMemory = { date: null, wide: null, keys: new Set() }; // open sections, 
 let flashHealthNext = false; // after a sync, highlight the health row once
 let mq = null;              // the wide-screen media query, to switch layouts
 
-// ---------- Symptom chips: the user's own list (Profile → Settings), then up to 3 names used in the
-// last 60 days that are not in it. Only the days are cached, so a list edit shows at once.
+// ---------- Chips learnt from the last 60 days. Symptoms: the user's own list (Profile → Settings), then
+// up to 3 names used that are not in it. Meals: the texts typed most often (recentMeals).
+// Only the days are cached, so a list edit shows at once.
 
-let recentCache = null;
-export async function loadSymptomOrder(a = api) {
-  if (!recentCache) {
-    const to = todayIso();
+let recentCache = null, recentTo = null;
+export function loadRecentDays(a = api) {
+  const to = todayIso();
+  if (!recentCache || recentTo !== to) {
+    recentTo = to;
     recentCache = a.listDays(addDays(to, -60), to).catch(e => { recentCache = null; console.error(e); return []; });
   }
-  return symptomChipList(symptomChips(), await recentCache);
+  return recentCache;
 }
-/** Quick add calls this after it logs a symptom, so the order learns it. */
+export async function loadSymptomOrder(a = api) {
+  return symptomChipList(symptomChips(), await loadRecentDays(a));
+}
+/** Quick add calls this after it logs a symptom or a meal, so the chips learn it. */
 export function forgetSymptomOrder() { recentCache = null; }
 
 /** Saves a log of another day than the one on display (Undo after a day change, quick add). */
@@ -134,6 +139,7 @@ async function render(ctx, params = {}) {
     healthForm: false,
     editTime: null,
     open: openMemory.keys,
+    recentDays: null,
   };
   pending.clear();
   pending.set(state.id, state);
@@ -160,6 +166,11 @@ function mounted(ctx) {
     if (!st || st.root !== root) return;
     st.symptomNames = names;
     redrawChips();
+  });
+  loadRecentDays().then(days => {
+    if (!st || st.root !== root) return;
+    st.recentDays = days;
+    for (const m of MEALS) redrawMealChips(m.key);
   });
 }
 
@@ -208,6 +219,14 @@ function redraw(key, focusSel) {
   let target = focusSel ? region.querySelector(focusSel) : null;
   if (!target && active) target = [...region.querySelectorAll('button, input, textarea')].find(x => focusKey(x) === active);
   if (target) target.focus({ preventScroll: !focusSel });
+}
+
+/** Meal chips show only while the meal is empty. */
+function redrawMealChips(key) {
+  const box = isLive(st) && st.root.querySelector(`[data-meal-chips="${key}"]`);
+  if (!box) return;
+  box.innerHTML = mealChipsHtml(st, key);
+  box.hidden = !box.innerHTML;
 }
 
 function redrawChips() {
@@ -544,6 +563,20 @@ const actions = {
     redrawSymptom(i, `[data-act="period"][data-v="${p}"]`);
   },
 
+  // Meals: a chip fills an empty meal with a text the user often types.
+  'use-meal'(el) {
+    const key = el.dataset.meal;
+    const meal = st.log.meals[key];
+    if (!meal || meal.text.trim()) return;
+    meal.text = el.dataset.text;
+    if (st.isToday && !meal.time) meal.time = nowHm();
+    changed(key);
+    redraw(key);
+    // Focus goes to the row, not to the text: on a phone the keyboard stays closed.
+    st.root.querySelector(`#tb-${key}`).focus();
+    flash(st.root.querySelector(`[data-row="${key}"]`));
+  },
+
   // Health
   async sync(el, e, ctx) {
     el.disabled = true;
@@ -649,7 +682,9 @@ function input(el) {
         const t = st.root.querySelector(`[data-f="meal-time"][data-meal="${el.dataset.meal}"]`);
         if (t) t.value = meal.time;
       }
+      const wasEmpty = !meal.text.trim();
       meal.text = el.value;
+      if (wasEmpty !== !meal.text.trim()) redrawMealChips(el.dataset.meal);
       return changed(el.dataset.meal);
     }
     case 'meal-time': l.meals[el.dataset.meal].time = el.value; return changed(el.dataset.meal);

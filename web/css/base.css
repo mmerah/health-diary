@@ -166,6 +166,12 @@ input, textarea, select {
 textarea { resize: vertical; line-height: 1.4; }
 input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 input[type="time"], input[type="date"] { font-family: var(--font-data); font-variant-numeric: tabular-nums; }
+/* iOS Safari gives date and time fields a fixed width that ignores width: 100%: in a two-column
+   grid the field goes over the next one. Without the native look, the field fits its column. */
+@supports (-webkit-touch-callout: none) {
+  input[type="date"] { -webkit-appearance: none; appearance: none; display: block; }
+  input[type="date"]::-webkit-date-and-time-value { text-align: left; }
+}
 /* Wide enough for 12-hour times ("07:40 AM") and the clock icon. */
 input.time { width: 8.6em; flex: none; padding: 6px 10px; background: var(--sunk); border-color: transparent; }
 input[aria-invalid="true"] { border-color: var(--high); }

@@ -199,25 +199,31 @@ export function mealTime(mealKey, now, isToday) {
   return Math.min(gap, 1440 - gap) > 180 ? { time: def.typical, usual: true } : { time: now, usual: false };
 }
 
+// "Rice, chicken." and "rice, chicken" are the same meal.
+const mealKeyOf = t => fold(t).replace(/\s+/g, ' ').replace(/[\s.,;!]+$/, '');
+
 /**
- * Recent texts of a meal, for one-tap chips: yesterday's first ("Same as yesterday"), then up to
- * 3 other distinct texts from the days before, newest first. days: [{ date, log }].
+ * Texts of a meal for one-tap chips: yesterday's first ("Same as yesterday"), then up to 3 other
+ * distinct texts, the most frequent first (newest first when equal). days: [{ date, log }].
  */
 export function recentMeals(days, mealKey, date, max = 3) {
   const list = [...(days || [])].filter(d => d && d.log && d.date < date).sort((a, b) => b.date.localeCompare(a.date));
   const text = d => (((d.log.meals || {})[mealKey] || {}).text || '').trim();
   const yesterday = list.find(d => d.date === addDays(date, -1) && text(d));
-  const seen = new Set();
   const out = [];
-  if (yesterday) { out.push({ label: 'Same as yesterday', text: text(yesterday) }); seen.add(fold(text(yesterday))); }
+  if (yesterday) out.push({ label: 'Same as yesterday', text: text(yesterday) });
+  // key → { text (newest spelling), n, rank (newest first) }
+  const seen = new Map();
   for (const d of list) {
     const t = text(d);
-    if (!t || seen.has(fold(t))) continue;
-    seen.add(fold(t));
-    out.push({ label: clip(t, 32), text: t });
-    if (out.length >= max + (yesterday ? 1 : 0)) break;
+    if (!t) continue;
+    const k = mealKeyOf(t);
+    if (seen.has(k)) seen.get(k).n += 1;
+    else seen.set(k, { text: t, n: 1, rank: seen.size });
   }
-  return out;
+  if (yesterday) seen.delete(mealKeyOf(text(yesterday)));
+  const often = [...seen.values()].sort((a, b) => b.n - a.n || a.rank - b.rank).slice(0, max);
+  return out.concat(often.map(x => ({ label: clip(x.text, 32), text: x.text })));
 }
 
 // ---------- Health corrected by hand

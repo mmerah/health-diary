@@ -107,11 +107,11 @@ const PART = String.raw`(?:de|du|des|la|le|van|von|der|den|di|da|del|della|dos|d
 const GLUED = String.raw`(?:[dDlL]['’])`;
 const NAME = String.raw`(?:${PART}[ \t]+){0,2}${GLUED}?${TOK}(?:(?:[ \t]+(?:${PART}[ \t]+){0,2}|[ \t]*${GLUED}|[ \t]+${GLUED})${TOK}){0,3}`;
 
-// Italian titles have inner dots ("Dott.ssa", "Sig.ra"): they are escaped below.
+// Italian titles have inner dots ("Dott.ssa", "Sig.ra"): reEscape() escapes them below.
 const TITLES = ['Professeur', 'Professor', 'Docteur', 'Doctor', 'Monsieur', 'Madame', 'Mademoiselle', 'Mlle', 'Mme', 'Mrs', 'Mr', 'Ms', 'Miss', 'Prof', 'Dr', 'Pr', 'Drs',
   'Dott.ssa', 'Dr.ssa', 'Prof.ssa', 'Sig.ra', 'Sig.na', 'Dottor', 'Dottore', 'Dottoressa', 'Signor', 'Signora', 'Signorina', 'Dott', 'Sig', 'Ing'];
 const TITLE_WORDS = [...TITLES, ...['DOCTEUR', 'DOCTOR', 'PROFESSEUR', 'PROFESSOR', 'MONSIEUR', 'MADAME', 'MME', 'MLLE', 'MRS', 'MR', 'DR', 'Herr', 'Frau']]
-  .sort((a, b) => b.length - a.length).map(t => t.replace(/\./g, '\\.')).join('|');
+  .sort((a, b) => b.length - a.length).map(reEscape).join('|');
 // German and Swiss degrees after a title: "Dr. med.", "Dr. med. dent.", "Prof. Dr. med.", "Dr. rer. nat.".
 const DEGREE = String.raw`(?:med|dent|vet|phil|rer|nat|pharm|habil|univ|h\.c|sc|jur|oec|biol|chem|psych)\.?`;
 const TITLE_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}(${TITLE_WORDS}|M)(\.?)((?:[ \t]+(?:${TITLE_WORDS})\.?|[ \t]+${DEGREE})*)[ \t]+(${NAME})`, 'gu');

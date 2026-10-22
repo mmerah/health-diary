@@ -1,6 +1,6 @@
 # Direct dependencies, pinned. requirements.txt is made from this file, with hashes:
 #   pip install pip-tools && pip-compile --generate-hashes --allow-unsafe -o requirements.txt requirements.in
-fastapi==0.143.0
+fastapi==0.146.0
 uvicorn==0.54.0
 httpx==0.28.1
 python-multipart==0.0.32

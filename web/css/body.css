@@ -160,3 +160,51 @@
 .chart-legend-sm { font-size: 0.8rem; gap: 4px 12px; margin-bottom: 4px; }
 .chart-legend-sm .chart-key { width: 14px; }
 @media (min-width: 640px) { .weekly-grid { row-gap: 28px; } }
+
+/* ---------- Trends: Overview / Compare switch, and the Compare view (js/screens/compare.js) */
+.trend-switch { flex: 0 1 260px; }
+.trend-switch button { min-width: 0; }
+@media (max-width: 420px) { .screen-head:has(.trend-switch) { flex-direction: column; align-items: stretch; } .trend-switch { flex: none; } }
+.cmp-grid { grid-template-columns: minmax(0, 1fr) !important; }
+
+/* Lane colors: the chip swatch, line and bars use the same color. Not red or amber: they mean severity here. */
+.lane-1 { --c: var(--accent); }
+.lane-2 { --c: var(--activity); }
+.lane-3 { --c: var(--ink); }
+.lane-4 { --c: var(--sleep); }
+.lane-food { --c: var(--ink); }
+.lane-symptom { --c: var(--high); }
+
+.cmp-picked { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cmp-pick {
+  display: inline-flex; align-items: center; gap: 8px; min-height: var(--touch); padding: 0 2px 0 14px;
+  border: 1.5px solid var(--c); border-radius: 999px; background: var(--surface); font-weight: 700; font-size: 0.925rem;
+}
+.cmp-pick .icon-btn { width: 38px; height: 38px; }
+.cmp-pick .icon-btn svg { width: 16px; height: 16px; }
+.cmp-swatch { width: 10px; height: 10px; border-radius: 50%; background: var(--c); flex: none; }
+.cmp-pick.lane-symptom .cmp-swatch { background: linear-gradient(90deg, var(--ok) 0 33%, var(--caution) 33% 66%, var(--high) 66%); border-radius: 3px; width: 14px; }
+.cmp-range { align-self: flex-start; }
+.cmp-range button { min-width: 76px; }
+
+.cmp-shade { fill: var(--accent-soft); }
+.chart-key.key-shade { width: 14px; height: 14px; border: 0; border-radius: 3px; background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.heat-legend .chart-key.is-dashed { width: 18px; height: 0; border-radius: 0; background: none; border-top: 2.5px dashed var(--muted); }
+.cmp-bar { fill: var(--c); opacity: 0.85; }
+.cmp-bar-zero { fill: var(--c); opacity: 0.4; }
+.chart-cell.cell-yes { fill: var(--c); }
+
+.cmp-words { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.cmp-words-title { font-size: 1rem; font-family: var(--font-body); font-weight: 700; }
+.cmp-words ul { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; }
+.cmp-words li { line-height: 1.45; }
+.cmp-words .pill { vertical-align: 1px; margin-left: 4px; }
+
+/* Picker sheet */
+.cmp-group { font-size: 0.875rem; font-family: var(--font-body); font-weight: 700; color: var(--muted); margin-top: 8px; }
+.cmp-days { font-size: 0.8rem; color: var(--muted); font-weight: 400; }
+.chip[aria-pressed="true"] .cmp-days { color: inherit; opacity: 0.8; }
+.chip:disabled { opacity: 0.45; cursor: default; }
+.cmp-food { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.cmp-food .field { flex: 1 1 220px; }
+.cmp-done { margin-top: 12px; position: sticky; bottom: 0; padding-top: 8px; background: var(--surface); }

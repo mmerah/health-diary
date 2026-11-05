@@ -5,6 +5,7 @@ import { duration, esc, num, plural } from '../core/format.js';
 import { bmi, MEASUREMENTS, measurementDef, measurementTypes, normalizeProfile, severityLabel } from '../core/schema.js';
 import { ICON, store, toast } from '../core/ui.js';
 import { lineChart, stripHeatmap, tableToggle, toggleTable } from './chart.js';
+import compare from './compare.js';
 import {
   CELL, changeWords, inRange, RANGES, rangeOf, sortByTime, symptomGrid, timeOf, trendSummary, weeklyMedians,
   weeklySymptomSummary, weightChange,
@@ -396,8 +397,16 @@ function mountCharts() {
 }
 
 
+/** Overview (all cards) or Compare (2 to 4 things on the same days). Each has its own address. */
+const viewSwitch = view => `<div class="seg trend-switch" role="group" aria-label="View">${[['overview', 'Overview'], ['compare', 'Compare']].map(([k, t]) =>
+  `<button type="button" data-act="view" data-value="${k}" aria-pressed="${k === view}">${t}</button>`).join('')}</div>`;
+const head = view => `<div class="screen-head"><h1 class="screen-title">Trends</h1>${viewSwitch(view)}</div>`;
+let mode = 'overview';
+
 export default {
-  async render(ctx) {
+  async render(ctx, params = {}) {
+    mode = params.view === 'compare' ? 'compare' : 'overview';
+    if (mode === 'compare') return `${head('compare')}<div class="trends-grid cmp-grid">${await compare.render(ctx)}</div>`;
     const today = todayIso();
     const [measurements, profile, days] = await Promise.all([
       ctx.api.listMeasurements(),
@@ -405,7 +414,7 @@ export default {
       ctx.api.listDays(addDays(today, -(WEEKS * 7 - 1)), today),
     ]);
     data = { measurements, profile: normalizeProfile(profile), days, today };
-    return `<div class="screen-head"><h1 class="screen-title">Trends</h1></div>
+    return `${head('overview')}
       ${summaryStrip()}
       <div class="trends-grid">
         ${weightCard()}
@@ -417,14 +426,23 @@ export default {
       </div>`;
   },
 
-  mounted() { mountCharts(); },
+  mounted(ctx) { if (mode === 'compare') compare.mounted(ctx); else mountCharts(); },
 
   async leave() {
+    compare.leave();
     charts.forEach(c => c.destroy());
     charts = [];
   },
 
   actions: {
+    ...compare.actions,
+
+    async view(el, e, ctx) {
+      if ((el.dataset.value === 'compare') === (mode === 'compare')) return;
+      await ctx.go('body', el.dataset.value === 'compare' ? { view: 'compare' } : {});
+      document.querySelector(`.trend-switch [data-value="${CSS.escape(el.dataset.value)}"]`)?.focus();
+    },
+
     add(el, e, ctx) { return ctx.quickAdd(el.dataset.type); },
 
     range(el) {

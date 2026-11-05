@@ -59,7 +59,7 @@ const ctx = {
 
 // ---------- Navigation and addresses
 // Each screen has an address, so the browser back button and the back gesture work:
-//   #today  #today/2026-10-07  #trends  #records  #report  #profile  #profile/settings
+//   #today  #today/2026-10-07  #trends  #trends/compare  #records  #report  #profile  #profile/settings
 
 const SLUG = { body: 'trends' };           // tab id → address word
 const TAB_OF = { trends: 'body', body: 'body' }; // address word → tab id (#body still works)
@@ -70,6 +70,7 @@ export function routeOf(hash) {
   if (!tab) return null;
   if (tab === 'today' && /^\d{4}-\d{2}-\d{2}$/.test(arg || '')) return { tab, params: { date: arg } };
   if (tab === 'profile' && arg === 'settings') return { tab, params: { view: 'settings' } };
+  if (tab === 'body' && arg === 'compare') return { tab, params: { view: 'compare' } };
   return { tab, params: {} };
 }
 
@@ -77,6 +78,7 @@ function hashOf(tab, params) {
   let h = SLUG[tab] || tab;
   if (tab === 'today' && params.date) h += `/${params.date}`;
   if (tab === 'profile' && params.view === 'settings') h += '/settings';
+  if (tab === 'body' && params.view === 'compare') h += '/compare';
   return `#${h}`;
 }
 

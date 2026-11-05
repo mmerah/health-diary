@@ -382,6 +382,160 @@ export function stripHeatmap(host, o) {
   return { destroy: stop };
 }
 
+// ---------- Compare: lanes on the same days
+
+/**
+ * compareChart(host, {
+ *   label: 'Sleep and headache, last 90 days',
+ *   dates: ['2026-08-20', …],                  // one column per day, oldest first
+ *   lanes: [{ name, kind: 'num'|'event', style: 'line'|'bar'|'severity'|'mark', values, values2,
+ *             cls: 'lane-1', axis: v => '7h', minSpan, sparse, cellClass: v => 'cell-sev-2' }],
+ *   shade: [true, false, …] | null,            // days to shade in all lanes (the days of the first event)
+ *   tip: j => ({ title, lines }),
+ * }) → { destroy() }
+ * One crosshair and one tooltip for all lanes. Keyboard: left and right move between days.
+ */
+export function compareChart(host, o) {
+  const { svg, tip, live } = frame(host, `${o.label}. Use the arrow keys to read each day.`);
+  const D = o.dates.length;
+  const NAME_H = 20, NUM_H = 72, EVENT_H = 20, GAP = 16, AXIS_H = 22, R = 6, NUM_PAD = 8;
+  const laneH = l => (l.kind === 'num' ? NUM_H : EVENT_H);
+  const padOf = l => (l.kind === 'num' ? NUM_PAD : 0); // room between the lane name and the top tick
+  const H = o.lanes.reduce((s, l) => s + NAME_H + padOf(l) + laneH(l) + GAP, 0) + AXIS_H - GAP;
+  const toMs = s2 => { const [y, m, d] = s2.split('-').map(Number); return new Date(y, m - 1, d).getTime(); };
+  let geo = null, at = -1;
+
+  /** The y range of a number lane. Bars start at 0. */
+  function yOf(l) {
+    const vals = l.values.concat(l.values2 || []).filter(Number.isFinite);
+    if (l.style !== 'bar') return yDomain(vals, { minSpan: l.minSpan || 1, count: 3 });
+    const step = niceStep(Math.max(l.minSpan || 1, ...vals) / 2);
+    const hi = Math.max(step * 2, Math.ceil(Math.max(0, ...vals) / step) * step);
+    const ticks = [];
+    for (let x = 0; x <= hi + step / 1e6; x += step) ticks.push(round6(x));
+    return { lo: 0, hi, ticks };
+  }
+
+  function draw(W) {
+    const ys = o.lanes.map(l => (l.kind === 'num' ? yOf(l) : null));
+    const L = Math.max(12, ...o.lanes.map((l, k) => (ys[k] ? Math.ceil(Math.max(...ys[k].ticks.map(t => l.axis(t).length)) * LABEL_PX) + 10 : 0)));
+    const cw = (W - L - R) / D;
+    const cx = j => L + (j + 0.5) * cw;
+    const gap = cw >= 6 ? 1.5 : cw >= 3 ? 0.75 : 0;
+    const bottom = H - AXIS_H;
+    let s = '';
+    if (o.shade) {
+      o.shade.forEach((on, j) => { if (on) s += `<rect class="cmp-shade" x="${(L + j * cw).toFixed(2)}" y="0" width="${cw.toFixed(2)}" height="${bottom}"/>`; });
+    }
+    const tops = [];
+    let y0 = 0;
+    o.lanes.forEach((l, k) => {
+      s += `<text class="chart-row-label" x="0" y="${y0 + 14}">${esc(l.name)}</text>`;
+      const top = y0 + NAME_H + padOf(l), h = laneH(l);
+      tops.push({ top, h });
+      if (l.kind === 'num') {
+        const y = ys[k], sy = scale(y.lo, y.hi, top + h, top);
+        for (const t of y.ticks) {
+          const py = sy(t).toFixed(1);
+          s += `<line class="chart-grid" x1="${L}" x2="${W - R}" y1="${py}" y2="${py}"/>`;
+          s += `<text class="chart-axis" x="${L - 8}" y="${py}" dy="4" text-anchor="end">${esc(l.axis(t))}</text>`;
+        }
+        if (l.style === 'bar') {
+          const bw = Math.max(1, Math.min(cw - gap, 14));
+          l.values.forEach((v, j) => {
+            if (!Number.isFinite(v)) return;
+            const py = sy(v);
+            s += v === 0
+              ? `<rect class="cmp-bar-zero ${l.cls}" x="${(cx(j) - bw / 2).toFixed(2)}" y="${(top + h - 1.5).toFixed(1)}" width="${bw.toFixed(2)}" height="1.5"/>`
+              : `<rect class="cmp-bar ${l.cls}" x="${(cx(j) - bw / 2).toFixed(2)}" y="${py.toFixed(1)}" width="${bw.toFixed(2)}" height="${(top + h - py).toFixed(1)}" rx="${bw >= 6 ? 1.5 : 0}"/>`;
+          });
+        } else {
+          for (const [vals, dashed] of [[l.values, false], [l.values2, true]]) {
+            if (!vals) continue;
+            let pts = vals.map((v, j) => (Number.isFinite(v) ? [cx(j), sy(v)] : null));
+            if (l.sparse) pts = pts.filter(Boolean); // a few readings: join them across the empty days
+            s += `<path class="chart-line ${l.cls}${dashed ? ' is-dashed' : ''}" d="${linePath(pts)}"/>`;
+            if (l.sparse || D <= 31) {
+              vals.forEach((v, j) => { if (Number.isFinite(v)) s += `<circle class="chart-dot ${l.cls}${dashed ? ' is-hollow' : ''}" cx="${cx(j).toFixed(1)}" cy="${sy(v).toFixed(1)}" r="3"/>`; });
+            }
+          }
+        }
+        tops[k].sy = sy;
+      } else {
+        l.values.forEach((v, j) => {
+          s += `<rect class="chart-cell ${esc(l.cellClass(v))}" x="${(L + j * cw + gap / 2).toFixed(2)}" y="${top}" width="${Math.max(0.5, cw - gap).toFixed(2)}" height="${h}" rx="${cw >= 8 ? 2 : 0}"/>`;
+        });
+      }
+      y0 = top + h + GAP;
+    });
+    const t0 = toMs(o.dates[0]), t1 = toMs(o.dates[D - 1]);
+    const sx = scale(t0, t1, cx(0), cx(D - 1));
+    const ticks = timeTicks(t0, t1, W < 420 ? 3 : 4);
+    ticks.forEach((t, i) => {
+      const anchor = i === 0 ? 'start' : i === ticks.length - 1 ? 'end' : 'middle';
+      const px = i === 0 ? L : i === ticks.length - 1 ? W - R : sx(t);
+      s += `<text class="chart-axis" x="${px.toFixed(1)}" y="${H - 6}" text-anchor="${anchor}">${esc(tickLabel(t, t1 - t0))}</text>`;
+    });
+    s += `<line class="chart-cross" x1="0" x2="0" y1="0" y2="${bottom}" visibility="hidden"/><g class="cmp-active"></g>`;
+    svg.setAttribute('width', W);
+    svg.setAttribute('height', H);
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.innerHTML = s;
+    geo = { L, cw, cx, tops };
+    if (at >= 0) show(at, false);
+  }
+
+  function show(j, announce) {
+    at = j;
+    const x = geo.cx(j);
+    const cross = svg.querySelector('.chart-cross');
+    cross.setAttribute('x1', x);
+    cross.setAttribute('x2', x);
+    cross.setAttribute('visibility', 'visible');
+    // Bigger dots on the day, in the number lanes.
+    let dots = '';
+    o.lanes.forEach((l, k) => {
+      if (l.kind !== 'num' || l.style === 'bar') return;
+      for (const [vals, hollow] of [[l.values, false], [l.values2, true]]) {
+        if (vals && Number.isFinite(vals[j])) dots += `<circle class="chart-dot is-active ${l.cls}${hollow ? ' is-hollow' : ''}" cx="${x.toFixed(1)}" cy="${geo.tops[k].sy(vals[j]).toFixed(1)}" r="5"/>`;
+      }
+    });
+    svg.querySelector('.cmp-active').innerHTML = dots;
+    const t = o.tip(j);
+    tip.innerHTML = tipHtml(t);
+    placeTip(tip, host, x, 0);
+    if (announce) live.textContent = tipText(t);
+  }
+  function hide() {
+    at = -1;
+    tip.hidden = true;
+    const cross = svg.querySelector('.chart-cross');
+    if (cross) cross.setAttribute('visibility', 'hidden');
+    const g = svg.querySelector('.cmp-active');
+    if (g) g.innerHTML = '';
+  }
+
+  const point = e => {
+    if (!geo) return;
+    const x = e.clientX - svg.getBoundingClientRect().left;
+    show(Math.max(0, Math.min(D - 1, Math.floor((x - geo.L) / geo.cw))), false);
+  };
+  svg.addEventListener('pointermove', point);
+  svg.addEventListener('pointerdown', point);
+  svg.addEventListener('pointerleave', () => { if (document.activeElement !== host) hide(); });
+  host.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { hide(); return; }
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+    e.preventDefault();
+    show(stepIndex(e.key, at, D), true);
+  });
+  host.addEventListener('focus', () => { if (at < 0 && geo) show(D - 1, true); });
+  host.addEventListener('blur', hide);
+
+  const stop = onWidth(host, draw);
+  return { destroy: stop };
+}
+
 // ---------- "Show as table" toggle
 
 /** A button that swaps a chart and its table. The screen handles data-act="chart-table". */
